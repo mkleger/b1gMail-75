@@ -43,7 +43,9 @@
 									{lng p="prio_$prio"}
 								</td>
 								<td nowrap="nowrap"{if $sortColumn=='date'} class="text-primary fw-semibold"{/if}>&nbsp;{date timestamp=$note.date nice=true}&nbsp;</td>
-								<td nowrap="nowrap"{if $sortColumn=='text'} class="text-primary fw-semibold"{/if}>&nbsp;<a href="javascript:previewNote('{$sid}', '{$noteID}');">{text value=$note.text}</a>&nbsp;</td>
+								<td class="bm-organizer-note-text{if $sortColumn=='text'} text-primary fw-semibold{/if}">
+									<a href="javascript:previewNote('{$sid}', '{$noteID}');" title="{text value=$note.text}">{text value=$note.text cut=80}</a>
+								</td>
 								<td nowrap="nowrap" class="text-end bm-organizer-task-col-actions">
 									<div class="btn-group btn-group-sm bm-organizer-task-actions" role="group" aria-label="{lng p="actions"}">
 										<a href="{sessionurl file='organizer.notes.php' params="action=editNote&id={$noteID}"}" class="btn btn-outline-secondary btn-icon" title="{lng p="edit"}" aria-label="{lng p="edit"}"><i class="ti ti-pencil icon" aria-hidden="true"></i></a>

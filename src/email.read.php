@@ -420,8 +420,7 @@ else if($_REQUEST['action'] == 'attachedZIP'
 
 				// headers
 				header('Pragma: public');
-				header(sprintf('Content-Disposition: attachment; filename="%s"',
-					addslashes(basename($file['fileName']))));
+				SendContentDispositionHeader('attachment', basename($file['fileName']));
 				header('Content-Type: application/octet-stream');
 				header(sprintf('Content-Length: %d',
 					$file['uncompressedSize']));
@@ -665,8 +664,7 @@ else if($_REQUEST['action'] == 'downloadAttachment'
 				$viewable_or_attachment = 'inline';
 			}
 			// 2024-05-02 End Check if it is a viewable type
-			header(sprintf('Content-Disposition: %s; filename="%s"',$viewable_or_attachment,
-						addslashes($part['filename'])));
+			SendContentDispositionHeader($viewable_or_attachment, $part['filename']);
 
 			$attData = &$part['body'];
 			$attData->Init();

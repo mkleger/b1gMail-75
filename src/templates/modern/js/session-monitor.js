@@ -67,7 +67,10 @@
 		var base = cfg.apiBase || '';
 		var path = cfg.apiUrl || 'start.php';
 		var url = (base !== '' ? base : '') + path;
-		return appendSid(url + (url.indexOf('?') !== -1 ? '&' : '?') + 'action=' + encodeURIComponent(action));
+		url = appendSid(url + (url.indexOf('?') !== -1 ? '&' : '?') + 'action=' + encodeURIComponent(action));
+		if(typeof clientTZ !== 'undefined')
+			url += (url.indexOf('?') !== -1 ? '&' : '?') + 'timezone=' + encodeURIComponent(String(clientTZ));
+		return url;
 	}
 
 	function showWarnModal() {
@@ -109,11 +112,24 @@
 		}
 	}
 
+	function timezoneBody(body) {
+		body = body || '';
+		if(typeof clientTZ === 'undefined')
+			return body;
+		return body + (body ? '&' : '') + 'timezone=' + encodeURIComponent(String(clientTZ));
+	}
+
 	function doSessionKeepAlive() {
-		return sessionFetch('sessionKeepAlive', { method: 'POST', body: '' }).then(function(result) {
+		return sessionFetch('sessionKeepAlive', { method: 'POST', body: timezoneBody('') }).then(function(result) {
 			if(result.data && result.data.ok)
 			{
 				hideWarnModal();
+				if(result.data.timezoneSynced && !window._bmTimezoneReloaded)
+				{
+					window._bmTimezoneReloaded = true;
+					window.location.reload();
+					return;
+				}
 				pollStatus();
 			}
 		}).catch(function() {});
@@ -237,6 +253,13 @@
 		sessionFetch('sessionStatus').then(function(result) {
 			if(!result.data)
 				return;
+			applyCsrfTokenFromResponse(result.data);
+			if(result.data.timezoneSynced && !window._bmTimezoneReloaded)
+			{
+				window._bmTimezoneReloaded = true;
+				window.location.reload();
+				return;
+			}
 			if(result.res.status === 401 && handleSessionPayload(result.data, 401))
 				return;
 			if(result.data.sessionExpired || (result.res.status === 401 && result.data.sessionExpired))

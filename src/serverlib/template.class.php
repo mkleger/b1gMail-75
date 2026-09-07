@@ -346,7 +346,6 @@ class Template extends Smarty\Smarty {
             if (!class_exists('BMPush', false)) {
                 include B1GMAIL_DIR.'serverlib/push.class.php';
             }
-            BMPush::ensureSchema();
             $this->assign('bmPushEnabled', BMPush::isEnabled());
         }
 
@@ -563,7 +562,6 @@ class Template extends Smarty\Smarty {
             if (!class_exists('BMPush', false)) {
                 include B1GMAIL_DIR.'serverlib/push.class.php';
             }
-            BMPush::ensureSchema();
             $pushEnabled = BMPush::isEnabled();
             $this->assign('bmPushEnabled', $pushEnabled);
             if ($pushEnabled) {

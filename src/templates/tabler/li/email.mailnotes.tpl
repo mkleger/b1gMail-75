@@ -4,7 +4,7 @@
 		<div><i class="ti ti-file-pencil alert-icon icon" aria-hidden="true"></i></div>
 		<div class="bm-mail-alert-body">
 			{lng p="thisisadraft"}
-			<a class="alert-link" href="email.compose.php?redirect={$mailID}{$sessionUrlSuffix}">{lng p="editsend"}</a>
+			<a class="alert-link" href="{sessionurl file='email.compose.php' params="redirect={$mailID}"}">{lng p="editsend"}</a>
 		</div>
 	</div>
 </div>

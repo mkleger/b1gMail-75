@@ -90,7 +90,7 @@
 	<tbody id="group_{$mailID}" style="display:{if isset($smarty.cookies.toggleGroup.$mailGroupID) && $smarty.cookies.toggleGroup.$mailGroupID=='closed'}none{/if};">
 	{assign var=first value=false}
 	{else}
-	<tr _draggable="true" _ondragstart="mailDragStart(event,{$mailID})" class="{$class}{if $mail.color>0} mailColor_{$mail.color}{/if}" id="mail_{$mailID}_ntr" _onmousedown="return mailMouseDown(event,{$mailID});" _onmouseup="mailMouseUp(event,{$mailID});" {if $folderID==-3}_ondblclick="document.location.href='email.compose.php?redirect={$mailID}{$sessionUrlSuffix}';"{else}_ondblclick="document.location.href='{sessionurl file='email.read.php' params="id={$mailID}"|escape:'javascript'}';"{/if} _oncontextmenu="return(false);">
+	<tr _draggable="true" _ondragstart="mailDragStart(event,{$mailID})" class="{$class}{if $mail.color>0} mailColor_{$mail.color}{/if}" id="mail_{$mailID}_ntr" _onmousedown="return mailMouseDown(event,{$mailID});" _onmouseup="mailMouseUp(event,{$mailID});" {if $folderID==-3}_ondblclick="document.location.href='{sessionurl file='email.compose.php' params="redirect={$mailID}"}';"{else}_ondblclick="document.location.href='{sessionurl file='email.read.php' params="id={$mailID}"|escape:'javascript'}';"{/if} _oncontextmenu="return(false);">
 		{if $templatePrefs.showCheckboxes}
 		<td style="text-align:center;width:24px;">
 			<label class="form-check mb-0"><input type="checkbox" class="form-check-input m-0" id="selecTable_{$mailID}" /></label>

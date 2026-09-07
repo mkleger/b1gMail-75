@@ -222,6 +222,7 @@
 		sessionFetch('sessionStatus').then(function(result) {
 			if(!result.data)
 				return;
+			applyCsrfTokenFromResponse(result.data);
 			if(result.res.status === 401 && handleSessionPayload(result.data, 401))
 				return;
 			if(result.data.sessionExpired || (result.res.status === 401 && result.data.sessionExpired))

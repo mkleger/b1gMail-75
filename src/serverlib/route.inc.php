@@ -31,21 +31,6 @@ function RouteRootDir()
 }
 
 /**
- * Ensure url_routing preference column exists.
- */
-function EnsureUrlRoutingPrefColumns()
-{
-	global $db;
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', 'url_routing');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-
-	if(!$exists)
-		$db->Query("ALTER TABLE {pre}prefs ADD COLUMN `url_routing` enum('yes','no') NOT NULL DEFAULT 'no'");
-}
-
-/**
  * Apply defaults for url_routing pref (legacy column; always treated as enabled).
  */
 function UrlRoutingApplyPrefDefaults()

@@ -928,6 +928,20 @@ function folderFlagMail(id, flag, value)
 					reloadFolderList(results.slice(id.length).join(','));
 				else
 					reloadFolderList();
+
+				if(typeof(setNotificationCount) == 'function')
+				{
+					var notifyUrl = 'start.php?action=getNotificationCount';
+					if(typeof bmSessionAppendUrl === 'function')
+						notifyUrl = bmSessionAppendUrl(notifyUrl);
+					else
+						notifyUrl += '&sid=' + currentSID;
+					MakeXMLRequest(notifyUrl, function(e)
+					{
+						if(e.readyState == 4)
+							setNotificationCount(parseInt(e.responseText));
+					});
+				}
 			}
 		}
 	});

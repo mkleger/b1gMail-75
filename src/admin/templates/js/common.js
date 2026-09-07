@@ -638,21 +638,58 @@ function adminCsrfToken()
 
 function adminPostNavigate(url, targetBlank)
 {
-    if(!url)
-        return;
-    var form = document.createElement('form');
-    form.method = 'post';
-    form.action = url;
-    form.style.display = 'none';
-    if(targetBlank)
-        form.target = '_blank';
-    var csrf = document.createElement('input');
-    csrf.type = 'hidden';
-    csrf.name = 'csrf_token';
-    csrf.value = adminCsrfToken();
-    form.appendChild(csrf);
-    document.body.appendChild(form);
-    form.submit();
+	if(!url)
+		return;
+
+	function submitWithToken(token)
+	{
+		var form = document.createElement('form');
+		form.method = 'post';
+		form.action = url;
+		form.style.display = 'none';
+		if(targetBlank)
+			form.target = '_blank';
+		var csrf = document.createElement('input');
+		csrf.type = 'hidden';
+		csrf.name = 'csrf_token';
+		csrf.value = token || adminCsrfToken();
+		form.appendChild(csrf);
+		document.body.appendChild(form);
+		form.submit();
+	}
+
+	/* Prefer a fresh token from sessionStatus so ACP actions still work after
+	   session_regenerate_id in another tab (e.g. prior impersonation). */
+	if(typeof bmSessionConfig !== 'undefined' && typeof fetch === 'function')
+	{
+		var cfg = bmSessionConfig;
+		var path = (cfg.apiBase || '') + (cfg.apiUrl || 'welcome.php');
+		var statusUrl = path + (path.indexOf('?') !== -1 ? '&' : '?') + 'action=sessionStatus';
+		if(typeof window.bmSessionAppendUrl === 'function')
+			statusUrl = window.bmSessionAppendUrl(statusUrl);
+		fetch(statusUrl, {
+			method: 'GET',
+			credentials: 'same-origin',
+			headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+		}).then(function(res) { return res.json(); }).then(function(data) {
+			if(data && data.csrfToken)
+			{
+				if(typeof bmCsrfToken !== 'undefined')
+					bmCsrfToken = data.csrfToken;
+				document.querySelectorAll('input[name="csrf_token"]').forEach(function(inp) {
+					inp.value = data.csrfToken;
+				});
+				submitWithToken(data.csrfToken);
+				return;
+			}
+			submitWithToken();
+		}).catch(function() {
+			submitWithToken();
+		});
+		return;
+	}
+
+	submitWithToken();
 }
 
 function executeAction(f)
