@@ -7653,6 +7653,26 @@ BODY.layout-fluid.bm-loggedin.bm-layout-combo.bm-li-organizer .bm-organizer-note
 	margin: 0;
 }
 
+/* Notizen: Textspalte auf eine Zeile kürzen, Aktionsbuttons sichtbar halten */
+BODY.layout-fluid.bm-loggedin.bm-layout-combo.bm-li-organizer .bm-organizer-notes #notesTable {
+	table-layout: fixed;
+	width: 100%;
+}
+
+BODY.layout-fluid.bm-loggedin.bm-layout-combo.bm-li-organizer .bm-organizer-notes #notesTable .bm-organizer-note-text {
+	max-width: 0;
+	overflow: hidden;
+	vertical-align: middle;
+}
+
+BODY.layout-fluid.bm-loggedin.bm-layout-combo.bm-li-organizer .bm-organizer-notes #notesTable .bm-organizer-note-text a {
+	display: block;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	min-width: 0;
+}
+
 BODY.layout-fluid.bm-loggedin.bm-layout-combo.bm-li-organizer .bm-organizer-todo #tasksTable .bm-organizer-task-col-actions,
 BODY.layout-fluid.bm-loggedin.bm-layout-combo.bm-li-organizer .bm-organizer-notes #notesTable .bm-organizer-task-col-actions {
 	width: 5.5rem;

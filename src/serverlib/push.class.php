@@ -25,56 +25,12 @@ class BMPush
     private static $schemaChecked = false;
 
     /**
-     * Ensure DB table and prefs columns exist.
+     * Schema lives in database.struct.json (SyncDBStruct / setup update).
+     * Kept as no-op so existing call sites stay safe.
      */
     public static function ensureSchema()
     {
-        global $db;
-
-        if (self::$schemaChecked) {
-            return;
-        }
         self::$schemaChecked = true;
-
-        global $mysql;
-
-        $table = $mysql['prefix'].'push_subscriptions';
-        $res = $db->Query('SHOW TABLES LIKE ?', $table);
-        if ($res->RowCount() == 0) {
-            $db->Query(
-                'CREATE TABLE `'.$table.'` (
-                    `id` int(11) NOT NULL AUTO_INCREMENT,
-                    `area` enum(\'user\',\'admin\') NOT NULL DEFAULT \'user\',
-                    `userid` int(11) NOT NULL DEFAULT 0,
-                    `adminid` int(11) NOT NULL DEFAULT 0,
-                    `endpoint` varchar(768) NOT NULL,
-                    `p256dh` varchar(255) NOT NULL,
-                    `auth` varchar(255) NOT NULL,
-                    `user_agent` varchar(255) NOT NULL DEFAULT \'\',
-                    `created` int(11) NOT NULL DEFAULT 0,
-                    PRIMARY KEY (`id`),
-                    KEY `area_user` (`area`,`userid`),
-                    KEY `area_admin` (`area`,`adminid`),
-                    KEY `endpoint` (`endpoint`(191))
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
-            );
-        }
-        $res->Free();
-
-        $prefsTable = $mysql['prefix'].'prefs';
-        $columns = [
-            'push_enabled' => "enum('yes','no') NOT NULL DEFAULT 'no'",
-            'push_vapid_public' => "text NOT NULL DEFAULT ''",
-            'push_vapid_private' => "text NOT NULL DEFAULT ''",
-            'push_vapid_subject' => "varchar(255) NOT NULL DEFAULT ''",
-        ];
-        foreach ($columns as $col => $def) {
-            $res = $db->Query('SHOW COLUMNS FROM `'.$prefsTable.'` LIKE ?', $col);
-            if ($res->RowCount() == 0) {
-                $db->Query('ALTER TABLE `'.$prefsTable.'` ADD `'.$col.'` '.$def);
-            }
-            $res->Free();
-        }
     }
 
     /**
@@ -96,9 +52,6 @@ class BMPush
     {
         global $bm_prefs;
 
-        self::ensureSchema();
-        ReadConfig();
-
         return isset($bm_prefs['push_enabled']) && $bm_prefs['push_enabled'] == 'yes'
             && self::hasVapidKeys();
     }
@@ -106,8 +59,6 @@ class BMPush
     public static function getPublicKey()
     {
         global $bm_prefs;
-
-        ReadConfig();
 
         return isset($bm_prefs['push_vapid_public']) ? trim($bm_prefs['push_vapid_public']) : '';
     }
@@ -120,9 +71,6 @@ class BMPush
     public static function loadVapidCredentials()
     {
         global $bm_prefs, $db;
-
-        self::ensureSchema();
-        ReadConfig();
 
         $privatePem = BMPushVapid::normalizePrivateKeyPem(
             isset($bm_prefs['push_vapid_private']) ? $bm_prefs['push_vapid_private'] : ''
@@ -172,8 +120,6 @@ class BMPush
     {
         global $db, $bm_prefs;
 
-        self::ensureSchema();
-
         if (!self::canGenerateKeys()) {
             return false;
         }
@@ -215,8 +161,6 @@ class BMPush
     public static function subscribe($area, $targetId, $subscription)
     {
         global $db;
-
-        self::ensureSchema();
 
         if (!self::isEnabled() || !is_array($subscription)) {
             return false;
@@ -291,8 +235,6 @@ class BMPush
     {
         global $db;
 
-        self::ensureSchema();
-
         $db->Query(
             'DELETE FROM {pre}push_subscriptions WHERE `area`=? AND `endpoint`=? AND '
             .($area == self::AREA_USER ? '`userid`=?' : '`adminid`=?'),
@@ -313,8 +255,6 @@ class BMPush
     public static function unsubscribeAll($area, $targetId)
     {
         global $db;
-
-        self::ensureSchema();
 
         $targetId = (int) $targetId;
         if ($targetId <= 0) {
@@ -543,8 +483,6 @@ class BMPush
     public static function countSubscriptions($area, $targetId)
     {
         global $db;
-
-        self::ensureSchema();
 
         $res = $db->Query(
             'SELECT COUNT(*) AS c FROM {pre}push_subscriptions WHERE `area`=? AND '

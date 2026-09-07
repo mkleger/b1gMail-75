@@ -332,11 +332,10 @@
 			"PRIMARY": [
 				"id"
 			],
-			"login_key": [
+			"login_ip": [
 				"account_type",
 				"account_id",
-				"ip",
-				"ua_hash"
+				"ip"
 			]
 		}
 	},
@@ -4635,7 +4634,7 @@
 				"varchar(255)",
 				"NO",
 				"",
-				"https:\/\/leta.mullvad.net\/search?q=%s",
+				"https://leta.mullvad.net/search?q=%s",
 				""
 			],
 			[
@@ -4755,7 +4754,7 @@
 				"varchar(128)",
 				"NO",
 				"",
-				"\/usr\/sbin\/sendmail",
+				"/usr/sbin/sendmail",
 				""
 			],
 			[
@@ -4851,7 +4850,7 @@
 				"varchar(128)",
 				"NO",
 				"",
-				"\/",
+				"/",
 				""
 			],
 			[
@@ -5683,7 +5682,7 @@
 				"varchar(128)",
 				"NO",
 				"",
-				"default.php\/BMCaptchaProvider_Default",
+				"default.php/BMCaptchaProvider_Default",
 				""
 			],
 			[
@@ -5988,6 +5987,38 @@
 				"NO",
 				"",
 				null,
+				""
+			],
+			[
+				"pw_hash_li_algo",
+				"enum('bcrypt','argon2id')",
+				"NO",
+				"",
+				"bcrypt",
+				""
+			],
+			[
+				"pw_hash_li_cost",
+				"int(11)",
+				"NO",
+				"",
+				"12",
+				""
+			],
+			[
+				"pw_hash_admin_algo",
+				"enum('bcrypt','argon2id')",
+				"NO",
+				"",
+				"bcrypt",
+				""
+			],
+			[
+				"pw_hash_admin_cost",
+				"int(11)",
+				"NO",
+				"",
+				"12",
 				""
 			],
 			[
@@ -7660,7 +7691,7 @@
 				"varchar(39)",
 				"NO",
 				"",
-				"n\/a",
+				"n/a",
 				""
 			],
 			[

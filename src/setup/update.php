@@ -31,7 +31,7 @@ $knownVersions = [
                         '7.4.0-Beta1', '7.4.0-Beta2', '7.4.0-Beta3', '7.4.0-Beta4', '7.4.0', 
                         '7.4.1-Beta1', '7.4.1-Beta2', '7.4.1-Beta3', '7.4.1-Beta4', '7.4.1-RC1', '7.4.1-RC2',
                         '7.4.2-RC1', '7.4.2-RC2',
-                        '7.5.0-RC1', '7.5.0-RC2'];
+                        '7.5.0-RC1', '7.5.0-RC2', '7.5.0-RC3'];
 
 
 // steps
@@ -300,6 +300,72 @@ elseif ($step == STEP_UPDATE_STEP) {
             mysqli_query($connection, 'UPDATE '.$mysql['prefix'].'staaten SET land = \'Eswatini\' WHERE id = 117'); // Rename Swasiland to Eswatini
             mysqli_query($connection, 'UPDATE '.$mysql['prefix'].'gruppen SET organizer = \'yes\''); // Allow organizer to all groups (default)
             mysqli_query($connection, 'UPDATE '.$mysql['prefix'].'aliase SET login = \'no\''); // No login with alias (default)
+        }
+
+        // 7.5: one-time data migrations (schema itself comes from database.struct.json / struct2)
+        if ($numVersion < 7503) {
+            $p = $mysql['prefix'];
+
+            // Pre-7.5 installs: keep Toolbox RPC working after column default "no".
+            if ($numVersion < 7501) {
+                mysqli_query($connection, 'UPDATE '.$p.'prefs SET clientapi_enable=\'yes\'');
+            }
+
+            // Fill cron_secret once if empty (column added by struct sync).
+            $res = mysqli_query($connection, 'SELECT cron_secret FROM '.$p.'prefs LIMIT 1');
+            if ($res) {
+                $row = mysqli_fetch_array($res, MYSQLI_ASSOC);
+                mysqli_free_result($res);
+                if (is_array($row) && trim((string) $row['cron_secret']) === '') {
+                    $secret = bin2hex(random_bytes(16));
+                    mysqli_query($connection, sprintf(
+                        'UPDATE '.$p.'prefs SET cron_secret=\'%s\'',
+                        SQLEscape($secret, $connection)
+                    ));
+                }
+            }
+
+            // MFA: backfill enabled_at from created.
+            $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$p.'mfa_accounts\'');
+            if ($res && mysqli_num_rows($res) > 0) {
+                mysqli_free_result($res);
+                mysqli_query($connection,
+                    'UPDATE '.$p.'mfa_accounts SET enabled_at=created'
+                    .' WHERE enabled=\'yes\' AND (enabled_at=0 OR enabled_at IS NULL)');
+            } elseif ($res) {
+                mysqli_free_result($res);
+            }
+
+            // known_logins: legacy unique key included ua_hash; new key is per account+IP.
+            $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$p.'known_logins\'');
+            if ($res && mysqli_num_rows($res) > 0) {
+                mysqli_free_result($res);
+                $idx = mysqli_query($connection, 'SHOW INDEX FROM '.$p.'known_logins WHERE Key_name=\'login_key\'');
+                $hasLegacy = $idx && mysqli_num_rows($idx) > 0;
+                if ($idx) {
+                    mysqli_free_result($idx);
+                }
+                if ($hasLegacy) {
+                    mysqli_query($connection,
+                        'DELETE t1 FROM '.$p.'known_logins t1'
+                        .' INNER JOIN '.$p.'known_logins t2'
+                        .' ON t1.account_type=t2.account_type AND t1.account_id=t2.account_id'
+                        .' AND t1.ip=t2.ip AND t1.id < t2.id');
+                    mysqli_query($connection, 'ALTER TABLE '.$p.'known_logins DROP INDEX `login_key`');
+                }
+                $idx = mysqli_query($connection, 'SHOW INDEX FROM '.$p.'known_logins WHERE Key_name=\'login_ip\'');
+                $hasNew = $idx && mysqli_num_rows($idx) > 0;
+                if ($idx) {
+                    mysqli_free_result($idx);
+                }
+                if (!$hasNew) {
+                    mysqli_query($connection,
+                        'ALTER TABLE '.$p.'known_logins'
+                        .' ADD UNIQUE KEY `login_ip` (`account_type`,`account_id`,`ip`)');
+                }
+            } elseif ($res) {
+                mysqli_free_result($res);
+            }
         }
 
         // add new root certificates

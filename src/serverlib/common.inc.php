@@ -2568,6 +2568,77 @@ function SmartyDateTime($field)
 }
 
 /**
+ * ASCII-safe fallback for the legacy Content-Disposition filename= parameter.
+ *
+ * @param string $filename
+ * @return string
+ */
+function ContentDispositionAsciiFilename($filename)
+{
+	$filename = str_replace(array("\r", "\n", "\0", '/', '\\'), '', (string)$filename);
+	if($filename === '')
+		return('download');
+
+	$fallback = $filename;
+	if(function_exists('iconv'))
+	{
+		$converted = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $filename);
+		if($converted !== false && $converted !== '')
+			$fallback = $converted;
+	}
+
+	$fallback = preg_replace('/[^\x20-\x7E]/', '_', $fallback);
+	$fallback = str_replace(array('"', '\\'), '_', $fallback);
+	$fallback = trim($fallback, " .\t");
+	if($fallback === '')
+		$fallback = 'download';
+
+	// Keep headers short for proxies / older stacks
+	if(strlen($fallback) > 180)
+	{
+		$ext = '';
+		$dot = strrpos($fallback, '.');
+		if($dot !== false && $dot > 0 && (strlen($fallback) - $dot) <= 12)
+		{
+			$ext = substr($fallback, $dot);
+			$fallback = substr($fallback, 0, $dot);
+		}
+		$fallback = substr($fallback, 0, max(1, 180 - strlen($ext))) . $ext;
+	}
+
+	return($fallback);
+}
+
+/**
+ * Send Content-Disposition with RFC 6266 UTF-8 filename encoding.
+ *
+ * Avoids raw non-ASCII bytes in HTTP headers (breaks downloads with umlauts /
+ * long names on many PHP/proxy setups).
+ *
+ * @param string $disposition 'attachment' or 'inline'
+ * @param string $filename Original (UTF-8) filename
+ */
+function SendContentDispositionHeader($disposition, $filename)
+{
+	$disposition = (strtolower(trim((string)$disposition)) === 'inline')
+		? 'inline'
+		: 'attachment';
+	$filename = str_replace(array("\r", "\n", "\0"), '', (string)$filename);
+	$filename = str_replace(array('/', '\\'), '_', $filename);
+	if($filename === '')
+		$filename = 'download';
+
+	$fallback = ContentDispositionAsciiFilename($filename);
+
+	header(sprintf(
+		'Content-Disposition: %s; filename="%s"; filename*=UTF-8\'\'%s',
+		$disposition,
+		$fallback,
+		rawurlencode($filename)
+	));
+}
+
+/**
  * send a file stream with speed limit
  *
  * @param resource $fp File stream
@@ -2977,8 +3048,13 @@ function RequestPrivileges($privileges, $return = false)
 					ReadCustomLanguage();
 				}
 
-				if(isset($_SESSION['bm_timezone']) && $bm_prefs['auto_tz'] == 'yes')
-					SetTimeZoneByOffsetSeconds((int)$_SESSION['bm_timezone']);
+				if($bm_prefs['auto_tz'] == 'yes')
+				{
+					if(!isset($_SESSION['bm_timezone']) && isset($userRow['last_timezone']))
+						$_SESSION['bm_timezone'] = (int)$userRow['last_timezone'];
+					if(isset($_SESSION['bm_timezone']))
+						SetTimeZoneByOffsetSeconds((int)$_SESSION['bm_timezone']);
+				}
 
 				$thisGroup = $thisUser->GetGroup();
 				$groupRow = $thisGroup->Fetch();
@@ -4266,19 +4342,13 @@ function ConnectDB()
 }
 
 /**
- * Ensure cron_secret exists and is filled (idempotent).
+ * Ensure cron_secret is filled (no schema checks — column comes from database.struct).
  *
  * Override via B1GMAIL_CRON_KEY in config.inc.php.
  */
-function EnsureCronAuthColumns()
+function EnsureCronSecretFilled()
 {
 	global $db, $bm_prefs;
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', 'cron_secret');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-	if(!$exists)
-		$db->Query('ALTER TABLE {pre}prefs ADD COLUMN `cron_secret` varchar(64) NOT NULL DEFAULT \'\'');
 
 	$current = '';
 	if(is_array($bm_prefs) && isset($bm_prefs['cron_secret']))
@@ -4300,43 +4370,6 @@ function EnsureCronAuthColumns()
 	}
 	if(is_array($bm_prefs))
 		$bm_prefs['cron_secret'] = $current;
-}
-
-/**
- * Toolbox RPC killswitch + verifier column (idempotent).
- *
- * New installs: clientapi_enable defaults to no (OSS has no Toolbox build
- * server). Existing rows get yes so a running BMToolbox keeps working.
- */
-function EnsureClientApiColumns()
-{
-	global $db, $bm_prefs;
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', 'clientapi_enable');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-	if(!$exists)
-	{
-		$db->Query('ALTER TABLE {pre}prefs ADD COLUMN `clientapi_enable` enum(\'yes\',\'no\') NOT NULL DEFAULT \'no\'');
-		$db->Query('UPDATE {pre}prefs SET clientapi_enable=?', 'yes');
-	}
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}users LIKE ?', 'tbx_pass');
-	$tbxExists = $res->RowCount() > 0;
-	$res->Free();
-	if(!$tbxExists)
-		$db->Query('ALTER TABLE {pre}users ADD COLUMN `tbx_pass` varchar(64) NOT NULL DEFAULT \'\'');
-
-	if(is_array($bm_prefs) && !isset($bm_prefs['clientapi_enable']))
-	{
-		$res = $db->Query('SELECT clientapi_enable FROM {pre}prefs LIMIT 1');
-		if($res->RowCount() == 1)
-		{
-			$row = $res->FetchArray(MYSQLI_ASSOC);
-			$bm_prefs['clientapi_enable'] = $row['clientapi_enable'];
-		}
-		$res->Free();
-	}
 }
 
 /**
@@ -4656,16 +4689,11 @@ function ReadConfig()
 	if(isset($bm_prefs['template']))
 		$bm_prefs['template'] = trim((string)$bm_prefs['template']);
 
-	EnsureSessionPrefColumns();
+	// Schema changes belong in database.struct.json + setup/update.php (SyncDBStruct).
 	SessionApplyPrefDefaults();
-	EnsureUrlRoutingPrefColumns();
 	UrlRoutingApplyPrefDefaults();
-	EnsurePasswordHashPrefColumns();
 	PasswordHashApplyPrefDefaults();
-	EnsurePwResetColumns();
-	EnsureCronAuthColumns();
-	EnsureClientApiColumns();
-	EnsureMfaSchema();
+	EnsureCronSecretFilled();
 	MfaApplyPrefDefaults();
 
 	// for backward compatibility
@@ -4784,6 +4812,53 @@ function ReleaseTempFile($userID, $tempID)
 }
 
 /**
+ * Resolve client GMT offset (seconds) from request, session, user row, or server.
+ *
+ * @param int|null $fallbackUserLast last_timezone from user row
+ * @return int Offset in seconds east of UTC
+ */
+function ResolveClientTimezoneOffset($fallbackUserLast = null)
+{
+	if(isset($_REQUEST['timezone']) && $_REQUEST['timezone'] !== '' && is_numeric($_REQUEST['timezone']))
+		return (int)$_REQUEST['timezone'];
+
+	if(isset($_SESSION['bm_timezone']) && is_numeric($_SESSION['bm_timezone']))
+		return (int)$_SESSION['bm_timezone'];
+
+	if($fallbackUserLast !== null && $fallbackUserLast !== '' && is_numeric($fallbackUserLast))
+		return (int)$fallbackUserLast;
+
+	return (int)date('Z');
+}
+
+/**
+ * Store and optionally apply a client timezone offset.
+ *
+ * @param int $offset Offset in seconds east of UTC
+ * @param int $userID User ID to persist as last_timezone (0 = session only)
+ * @return bool True when the session offset changed
+ */
+function ApplyClientTimezoneOffset($offset, $userID = 0)
+{
+	global $bm_prefs, $db;
+
+	$offset = (int)$offset;
+	if($offset < -43200 || $offset > 50400 || ($offset % 60) !== 0)
+		return false;
+
+	$prev = isset($_SESSION['bm_timezone']) ? (int)$_SESSION['bm_timezone'] : null;
+	$_SESSION['bm_timezone'] = $offset;
+
+	if($userID > 0 && isset($db) && is_object($db))
+		$db->Query('UPDATE {pre}users SET last_timezone=? WHERE id=?', $offset, (int)$userID);
+
+	if(isset($bm_prefs['auto_tz']) && $bm_prefs['auto_tz'] == 'yes')
+		SetTimeZoneByOffsetSeconds($offset);
+
+	return ($prev === null || $prev !== $offset);
+}
+
+/**
  * set timezone by zone name
  *
  * @param string $name Name
@@ -4804,7 +4879,18 @@ function SetTimeZoneByName($name)
  */
 function SetTimeZoneByOffsetSeconds($offset)
 {
-	$timezones = array(
+	$offset = (int)$offset;
+	$previous = @date_default_timezone_get();
+
+	$candidates = array();
+	$abbrDst = @timezone_name_from_abbr('', $offset, 1);
+	$abbrStd = @timezone_name_from_abbr('', $offset, 0);
+	if($abbrDst)
+		$candidates[] = $abbrDst;
+	if($abbrStd)
+		$candidates[] = $abbrStd;
+
+	$candidates = array_merge($candidates, array(
 		'Pacific/Kwajalein',
 		'Pacific/Samoa',
 		'Pacific/Honolulu',
@@ -4820,6 +4906,7 @@ function SetTimeZoneByOffsetSeconds($offset)
 		'Atlantic/Azores',
 		'Europe/London',
 		'Europe/Berlin',
+		'Europe/Zurich',
 		'Europe/Helsinki',
 		'Europe/Moscow',
 		'Asia/Tehran',
@@ -4834,17 +4921,41 @@ function SetTimeZoneByOffsetSeconds($offset)
 		'Australia/Darwin',
 		'Pacific/Guam',
 		'Asia/Magadan',
-		'Asia/Kamchatka'
-    );
+		'Asia/Kamchatka',
+		'UTC',
+	));
 
-	foreach($timezones as $timezone)
+	$seen = array();
+	foreach($candidates as $timezone)
 	{
-		SetTimeZoneByName($timezone);
-		$thisOffset = date('Z');
+		if(isset($seen[$timezone]))
+			continue;
+		$seen[$timezone] = true;
 
-		if($thisOffset == $offset)
-			return(true);
+		if(!@date_default_timezone_set($timezone))
+			continue;
+
+		if((int)date('Z') === $offset)
+			return true;
 	}
 
-	return(false);
+	if(class_exists('DateTimeZone'))
+	{
+		foreach(DateTimeZone::listIdentifiers() as $timezone)
+		{
+			if(isset($seen[$timezone]))
+				continue;
+
+			if(!@date_default_timezone_set($timezone))
+				continue;
+
+			if((int)date('Z') === $offset)
+				return true;
+		}
+	}
+
+	if($previous)
+		@date_default_timezone_set($previous);
+
+	return false;
 }

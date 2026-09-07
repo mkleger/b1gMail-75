@@ -4,33 +4,6 @@
  */
 
 /**
- * Ensure session-related preference columns exist.
- */
-function EnsureSessionPrefColumns()
-{
-	global $db;
-
-	$columns = array(
-		'session_lifetime'       => 'int(11) NOT NULL DEFAULT 480',
-		'session_idle_timeout'   => 'int(11) NOT NULL DEFAULT 30',
-		'session_warn_before'    => 'int(11) NOT NULL DEFAULT 2',
-		'session_cookie_mode'    => "enum('yes','no') NOT NULL DEFAULT 'yes'",
-		'session_url_compat'     => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'admin_whitelist_ips'    => 'text NOT NULL',
-	);
-
-	foreach($columns as $column => $definition)
-	{
-		$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', $column);
-		$exists = $res->RowCount() > 0;
-		$res->Free();
-
-		if(!$exists)
-			$db->Query('ALTER TABLE {pre}prefs ADD COLUMN `' . $column . '` ' . $definition);
-	}
-}
-
-/**
  * Apply defaults for session prefs loaded from DB.
  */
 function SessionApplyPrefDefaults()
@@ -327,6 +300,14 @@ function SessionUrl($url)
 		$converted = PublicConvertLegacyUrl($url);
 		if($converted !== null)
 			$url = $converted;
+		else if(function_exists('PublicRoutingActive') && PublicRoutingActive()
+			&& function_exists('PublicEnsureAbsoluteUrl')
+			&& preg_match('#^[A-Za-z0-9_.-]+\.php([?#]|$)#', $url))
+		{
+			// Nested pretty URLs (e.g. /email/read/123) break relative *.php links;
+			// keep legacy scripts root-absolute when they have no pretty mapping.
+			$url = PublicEnsureAbsoluteUrl($url);
+		}
 	}
 
 	if(strpos($url, '?') !== false && substr($url, -1) !== '?' && substr($url, -1) !== '&')
@@ -641,14 +622,24 @@ function SessionInitLoginTimestamps($admin = false)
 
 /**
  * Regenerate session id after login.
+ *
+ * @param bool $preserveCsrf Keep existing CSRF token (e.g. ACP impersonation
+ *                           must not invalidate the still-open admin tab).
  */
-function SessionRegenerateOnLogin()
+function SessionRegenerateOnLogin($preserveCsrf = false)
 {
 	if(session_status() !== PHP_SESSION_ACTIVE)
 		@session_start();
 
 	@session_regenerate_id(true);
-	CsrfRegenerateToken();
+	if($preserveCsrf)
+	{
+		if(empty($_SESSION['bm_csrfToken']))
+			$_SESSION['bm_csrfToken'] = bin2hex(random_bytes(32));
+		CsrfSyncCookieSet($_SESSION['bm_csrfToken']);
+	}
+	else
+		CsrfRegenerateToken();
 	SessionRebindAdminCookieLock();
 }
 
@@ -1323,6 +1314,10 @@ function SessionGetStatusArray($admin = false)
 	if(!$locked && $warnBefore > 0 && $idle > 0 && $idleIn > 0 && $idleIn <= $warnBefore)
 		$warn = true;
 
+	$timezoneSynced = !empty($_SESSION['bm_timezone_just_synced']);
+	if($timezoneSynced)
+		unset($_SESSION['bm_timezone_just_synced']);
+
 	return array(
 		'ok'         => true,
 		'locked'     => $locked,
@@ -1333,6 +1328,7 @@ function SessionGetStatusArray($admin = false)
 		'idle'       => (int)$bm_prefs['session_idle_timeout'],
 		'warnBefore' => (int)$bm_prefs['session_warn_before'],
 		'csrfToken'  => CsrfTokenGet(),
+		'timezoneSynced' => $timezoneSynced,
 	);
 }
 
@@ -1535,6 +1531,28 @@ function SessionUnlock($passwordPlain, $admin = false)
 }
 
 /**
+ * Apply timezone offset from API request (sessionStatus / keepAlive).
+ *
+ * @return bool True when the offset changed
+ */
+function SessionSyncTimezoneFromRequest()
+{
+	global $userRow, $bm_prefs;
+
+	if(!isset($bm_prefs['auto_tz']) || $bm_prefs['auto_tz'] != 'yes')
+		return false;
+
+	if(!isset($_REQUEST['timezone']) || $_REQUEST['timezone'] === '' || !is_numeric($_REQUEST['timezone']))
+		return false;
+
+	$userID = (!empty($userRow['id'])) ? (int)$userRow['id'] : 0;
+	$changed = ApplyClientTimezoneOffset((int)$_REQUEST['timezone'], $userID);
+	if($changed)
+		$_SESSION['bm_timezone_just_synced'] = true;
+	return $changed;
+}
+
+/**
  * @param bool $admin
  */
 function SessionKeepAlive($admin = false)
@@ -1544,6 +1562,9 @@ function SessionKeepAlive($admin = false)
 	$keys = SessionLifecycleKeys($admin);
 	$_SESSION[$keys['activity']] = time();
 	$_SESSION[$keys['locked']] = false;
+
+	if(!$admin)
+		SessionSyncTimezoneFromRequest();
 
 	if(!$admin && !empty($userRow['id']))
 	{
@@ -1581,6 +1602,7 @@ function SessionHandleUserApi($action)
 	switch($action)
 	{
 	case 'sessionStatus':
+		SessionSyncTimezoneFromRequest();
 		SessionJsonResponse(SessionGetStatusArray(false));
 		break;
 

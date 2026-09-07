@@ -1849,6 +1849,18 @@ class BMMailbox
 			if(isset($tpl) && is_object($tpl) && isset($tpl->_tpl_vars) && isset($tpl->_tpl_vars['folderList']))
 				$tpl->reassignFolderList = true;
 
+			// Sync in-app notifications when a mail is marked as read
+			if($flag == FLAG_UNREAD && !$value
+				&& ($currentFlags & FLAG_UNREAD) != 0
+				&& (int)$row['userid'] == (int)$this->_userID
+				&& is_object($this->_userObject))
+			{
+				$this->_userObject->MarkMailRelatedNotificationsRead((int)$mail);
+
+				if(isset($tpl) && is_object($tpl))
+					$tpl->assign('bmUnreadNotifications', $this->_userObject->GetUnreadNotifications());
+			}
+
 			return($newFlags);
 		}
 		else

@@ -27,7 +27,6 @@ if(!isset($_REQUEST['action']))
 	$_REQUEST['action'] = 'common';
 
 include('../serverlib/push.class.php');
-BMPush::ensureSchema();
 ReadConfig();
 
 $tabs = array(
@@ -106,9 +105,6 @@ if(strcasecmp((string)$_REQUEST['action'], 'generateVapid') === 0)
 function PrefsCommonSaveSessionLoginPrefs()
 {
 	global $db;
-
-	EnsureSessionPrefColumns();
-	EnsureUrlRoutingPrefColumns();
 
 	if(isset($_POST['ssl_url']) && trim($_POST['ssl_url']) != ''
 		&& substr($_POST['ssl_url'], -1) != '/')
