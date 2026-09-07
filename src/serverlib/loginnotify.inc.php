@@ -4,23 +4,6 @@
  */
 
 /**
- * @return bool
- */
-function EnsureAdminEmailColumn()
-{
-	global $db;
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}admins LIKE ?', 'email');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-
-	if(!$exists)
-		$db->Query('ALTER TABLE {pre}admins ADD COLUMN `email` varchar(255) NOT NULL DEFAULT \'\' AFTER `lastname`');
-
-	return true;
-}
-
-/**
  * E-Mail address for admin login notifications.
  *
  * @param int $adminID
@@ -29,8 +12,6 @@ function EnsureAdminEmailColumn()
 function AdminLoginNotifyEmail($adminID)
 {
 	global $db;
-
-	EnsureAdminEmailColumn();
 
 	$res = $db->Query('SELECT `email` FROM {pre}admins WHERE `adminid`=?', (int)$adminID);
 	if($res->RowCount() != 1)
@@ -47,60 +28,6 @@ function AdminLoginNotifyEmail($adminID)
 		return false;
 
 	return $email;
-}
-
-function EnsureLoginNotifySchema()
-{
-	global $db;
-
-	EnsureAdminEmailColumn();
-
-	$db->Query('CREATE TABLE IF NOT EXISTS {pre}known_logins (
-		`id` int(11) NOT NULL AUTO_INCREMENT,
-		`account_type` enum(\'user\',\'admin\') NOT NULL,
-		`account_id` int(11) NOT NULL,
-		`ip` varchar(45) NOT NULL,
-		`ua_hash` char(64) NOT NULL,
-		`first_seen` int(11) NOT NULL DEFAULT 0,
-		`last_seen` int(11) NOT NULL DEFAULT 0,
-		PRIMARY KEY (`id`),
-		UNIQUE KEY `login_ip` (`account_type`,`account_id`,`ip`)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
-
-	LoginNotifyMigrateKnownLoginsIndex();
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}users LIKE ?', 'notify_login_new_ip');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-	if(!$exists)
-		$db->Query('ALTER TABLE {pre}users ADD COLUMN `notify_login_new_ip` enum(\'yes\',\'no\') NOT NULL DEFAULT \'yes\' AFTER `notify_birthday`');
-
-	return true;
-}
-
-/**
- * One known-login row per account + IP (legacy index included user-agent).
- */
-function LoginNotifyMigrateKnownLoginsIndex()
-{
-	global $db;
-
-	$res = $db->Query("SHOW INDEX FROM {pre}known_logins WHERE Key_name='login_key'");
-	$hasLegacyIndex = $res->RowCount() > 0;
-	$res->Free();
-
-	if(!$hasLegacyIndex)
-		return;
-
-	$db->Query('DELETE t1 FROM {pre}known_logins t1 INNER JOIN {pre}known_logins t2 ON t1.account_type=t2.account_type AND t1.account_id=t2.account_id AND t1.ip=t2.ip AND t1.id < t2.id');
-	$db->Query('ALTER TABLE {pre}known_logins DROP INDEX `login_key`');
-
-	$res = $db->Query("SHOW INDEX FROM {pre}known_logins WHERE Key_name='login_ip'");
-	$hasNewIndex = $res->RowCount() > 0;
-	$res->Free();
-
-	if(!$hasNewIndex)
-		$db->Query('ALTER TABLE {pre}known_logins ADD UNIQUE KEY `login_ip` (`account_type`,`account_id`,`ip`)');
 }
 
 /**
@@ -238,8 +165,6 @@ class BMLoginNotify
 	{
 		global $db;
 
-		EnsureLoginNotifySchema();
-
 		$res = $db->Query('SELECT notify_login_new_ip FROM {pre}users WHERE id=?', (int)$userID);
 		if($res->RowCount() != 1)
 		{
@@ -302,8 +227,6 @@ class BMLoginNotify
 			return false;
 
 		global $db, $bm_prefs;
-
-		EnsureLoginNotifySchema();
 
 		$ip = function_exists('SessionClientIp') ? SessionClientIp() : (isset($_SERVER['REMOTE_ADDR']) ? $_SERVER['REMOTE_ADDR'] : '');
 		$ua = isset($_SERVER['HTTP_USER_AGENT']) ? $_SERVER['HTTP_USER_AGENT'] : '';
@@ -393,8 +316,6 @@ class BMLoginNotify
 		$accountID = (int)$accountID;
 		if($accountID <= 0 || ($accountType !== 'user' && $accountType !== 'admin'))
 			return;
-
-		EnsureLoginNotifySchema();
 
 		$db->Query('DELETE FROM {pre}known_logins WHERE account_type=? AND account_id=?',
 			$accountType,

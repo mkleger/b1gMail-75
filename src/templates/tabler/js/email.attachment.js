@@ -11,6 +11,12 @@ function mailAttachmentDownloadUrl(mailId, attachment, inline)
 	if(inline)
 		url += '&view=true';
 
+	/* Absolute URL: relative paths break under pretty URLs (e.g. /mail/inbox). */
+	if(typeof bmLegacyApiUrl === 'function')
+		return(bmLegacyApiUrl(url));
+	if(typeof bmAppendSession === 'function')
+		return(bmAppendSession(url));
+
 	return(url);
 }
 

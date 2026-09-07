@@ -487,9 +487,7 @@ else if($_REQUEST['action'] == 'getAttachment'
 	{
 		// headers
 		header('Pragma: public');
-		header(sprintf('Content-Disposition: %s; filename="%s"',
-			$contentDisposition,
-			addslashes(_unescape($_REQUEST['name']))));
+		SendContentDispositionHeader($contentDisposition, _unescape($_REQUEST['name']));
 		header(sprintf('Content-Type: %s',
 			$_REQUEST['type']));
 		header(sprintf('Content-Length: %d',

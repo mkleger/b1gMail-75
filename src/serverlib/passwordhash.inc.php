@@ -6,31 +6,6 @@
 /**
  * @return void
  */
-function EnsurePasswordHashPrefColumns()
-{
-	global $db;
-
-	$columns = array(
-		'pw_hash_li_algo'     => "enum('bcrypt','argon2id') NOT NULL DEFAULT 'bcrypt'",
-		'pw_hash_li_cost'     => 'int(11) NOT NULL DEFAULT 12',
-		'pw_hash_admin_algo'  => "enum('bcrypt','argon2id') NOT NULL DEFAULT 'bcrypt'",
-		'pw_hash_admin_cost'  => 'int(11) NOT NULL DEFAULT 12',
-	);
-
-	foreach($columns as $column => $definition)
-	{
-		$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', $column);
-		$exists = $res->RowCount() > 0;
-		$res->Free();
-
-		if(!$exists)
-			$db->Query('ALTER TABLE {pre}prefs ADD COLUMN `' . $column . '` ' . $definition);
-	}
-}
-
-/**
- * @return void
- */
 function PasswordHashApplyPrefDefaults()
 {
 	global $bm_prefs;
@@ -374,50 +349,3 @@ function PasswordHashAdminAlgoChoices()
 	return $choices;
 }
 
-/**
- * Widen pw_reset_key and add pw_reset_expires (idempotent).
- *
- * @return void
- */
-function EnsurePwResetColumns()
-{
-	global $db;
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}users LIKE ?', 'pw_reset_expires');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-	if(!$exists)
-		$db->Query('ALTER TABLE {pre}users ADD COLUMN `pw_reset_expires` int(11) NOT NULL DEFAULT 0');
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}users LIKE ?', 'pw_reset_key');
-	$col = $res->FetchArray(MYSQLI_ASSOC);
-	$res->Free();
-	$type = (isset($col['Type']) && is_string($col['Type'])) ? strtolower($col['Type']) : '';
-	if($type === '' || strpos($type, 'varchar(64)') === false)
-	{
-		if($col)
-			$db->Query('ALTER TABLE {pre}users MODIFY COLUMN `pw_reset_key` varchar(64) NOT NULL DEFAULT \'\'');
-		else
-			$db->Query('ALTER TABLE {pre}users ADD COLUMN `pw_reset_key` varchar(64) NOT NULL DEFAULT \'\'');
-
-		$db->Query('UPDATE {pre}users SET pw_reset_new=?,pw_reset_key=?,pw_reset_expires=? WHERE pw_reset_key!=?',
-			'',
-			'',
-			0,
-			'');
-	}
-
-	$hasIndex = false;
-	$res = $db->Query('SHOW INDEX FROM {pre}users');
-	while($row = $res->FetchArray(MYSQLI_ASSOC))
-	{
-		if(isset($row['Column_name']) && $row['Column_name'] === 'pw_reset_key')
-		{
-			$hasIndex = true;
-			break;
-		}
-	}
-	$res->Free();
-	if(!$hasIndex)
-		$db->Query('ALTER TABLE {pre}users ADD INDEX `pw_reset_key` (`pw_reset_key`)');
-}

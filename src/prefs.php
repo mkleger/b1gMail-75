@@ -172,7 +172,6 @@ else if($_REQUEST['action'] == 'common')
 		$composeDefaults	= array();
 	if(!array_key_exists('savecopy', $composeDefaults)) $composeDefaults['savecopy']	= '';
 	if(!array_key_exists('priority', $composeDefaults)) $composeDefaults['priority']	= '';
-	EnsureLoginNotifySchema();
 	$loginNotifyAllowed = isset($bm_prefs['login_notify_li']) && $bm_prefs['login_notify_li'] == 'yes'
 		&& MfaGroupOption((int)$groupRow['id'], 'login_notify', 'no') == 'yes';
 	// save?
@@ -300,7 +299,6 @@ else if($_REQUEST['action'] == 'common')
 	if (!class_exists('BMPush', false)) {
 		include B1GMAIL_DIR.'serverlib/push.class.php';
 	}
-	BMPush::ensureSchema();
 	$tpl->assign('bmPushEnabled', BMPush::isEnabled());
 	if (BMPush::isEnabled()) {
 		$pushPrefs = BMPush::getUserPushPrefs($thisUser->_id);

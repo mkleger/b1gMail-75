@@ -82,6 +82,16 @@ if($_REQUEST['action'] == 'start')
 
 	// note list
 	$noteList = $notes->GetNoteList($sortColumn, $sortOrder);
+	foreach($noteList as $noteID => $note)
+	{
+		$raw = (string)$note['text'];
+		$parts = preg_split("/\r\n|\n|\r/", $raw, 2);
+		$firstLine = isset($parts[0]) ? trim($parts[0]) : '';
+		if($firstLine === '')
+			$firstLine = trim(preg_replace('/\s+/u', ' ', $raw));
+		// List view only shows a short teaser; full text via AJAX preview
+		$noteList[$noteID]['text'] = $firstLine;
+	}
 
 	// page output
 	if(isset($_REQUEST['show']))
@@ -92,6 +102,7 @@ if($_REQUEST['action'] == 'start')
 	$tpl->assign('sortOrderInv', $sortOrder == 'asc' ? 'desc' : 'asc');
 	$tpl->assign('pageContent', 'li/organizer.notes.tpl');
 	$tpl->display('li/index.tpl');
+	exit();
 }
 
 /**
@@ -146,6 +157,7 @@ else if($_REQUEST['action'] == 'addNote')
 	$tpl->assign('pageTitle', $lang_user['addnote']);
 	$tpl->assign('pageContent', 'li/organizer.notes.edit.tpl');
 	$tpl->display('li/index.tpl');
+	exit();
 }
 
 /**
@@ -173,6 +185,7 @@ else if($_REQUEST['action'] == 'editNote'
 		$tpl->assign('pageContent', 'li/organizer.notes.edit.tpl');
 		$tpl->assign('note', $noteInfo);
 		$tpl->display('li/index.tpl');
+		exit();
 	}
 }
 
