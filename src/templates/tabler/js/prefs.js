@@ -216,15 +216,24 @@ function exportPrivateCert(hash)
 		if (subBtn) {
 			subBtn.addEventListener('click', function () {
 				subBtn.disabled = true;
+				if (testResult) {
+					testResult.textContent = '';
+				}
 				bmPush.subscribe(collectPushTypes()).then(function (r) {
 					subBtn.disabled = false;
 					if (r && r.ok) {
 						syncPushUi();
+						if (testResult) {
+							testResult.textContent = lang['push_enabled_ok'] || lang['push_enable_ok'] || '';
+						}
 					} else if (testResult) {
 						testResult.textContent = lang['push_enable_fail'] || lang['push_enabled_fail'] || '';
 					}
 				}).catch(function () {
 					subBtn.disabled = false;
+					if (testResult) {
+						testResult.textContent = lang['push_enable_fail'] || lang['push_enabled_fail'] || '';
+					}
 				});
 			});
 		}

@@ -78,9 +78,18 @@ class BMPushWeb
             return false;
         }
 
-        $localPublicKey = "\x04".$localDetails['ec']['x'].$localDetails['ec']['y'];
+        $localPublicKey = self::uncompressedPublicKey(
+            $localDetails['ec']['x'],
+            $localDetails['ec']['y']
+        );
+        if ($localPublicKey === false) {
+            return false;
+        }
 
         $userPem = self::publicKeyToPem($userPublicKey);
+        if ($userPem === false) {
+            return false;
+        }
         $userKey = openssl_pkey_get_public($userPem);
         if ($userKey === false) {
             return false;
@@ -90,9 +99,14 @@ class BMPushWeb
             return false;
         }
 
-        $sharedSecret = openssl_pkey_derive($userKey, $localKey, 256);
-        if ($sharedSecret === false) {
+        // Do not pass key_length: on PHP 8.1 + OpenSSL 1.1.1 it can segfault the FPM worker.
+        $sharedSecret = openssl_pkey_derive($userKey, $localKey);
+        if ($sharedSecret === false || $sharedSecret === '') {
             return false;
+        }
+        // P-256 ECDH secret is 32 bytes; truncate only if a build returns more.
+        if (strlen($sharedSecret) > 32) {
+            $sharedSecret = substr($sharedSecret, 0, 32);
         }
 
         $salt = random_bytes(16);
@@ -123,6 +137,40 @@ class BMPushWeb
         return $salt.$recordSize.chr(strlen($localPublicKey)).$localPublicKey.$ciphertext.$tag;
     }
 
+    /**
+     * Build uncompressed P-256 public key (0x04 || X || Y), padding coordinates to 32 bytes.
+     *
+     * @param string $x
+     * @param string $y
+     *
+     * @return string|false
+     */
+    private static function uncompressedPublicKey($x, $y)
+    {
+        $x = self::padEcCoordinate($x);
+        $y = self::padEcCoordinate($y);
+        if ($x === false || $y === false) {
+            return false;
+        }
+
+        return "\x04".$x.$y;
+    }
+
+    /**
+     * @param string $coord
+     *
+     * @return string|false
+     */
+    private static function padEcCoordinate($coord)
+    {
+        $coord = ltrim((string) $coord, "\x00");
+        if (strlen($coord) > 32) {
+            return false;
+        }
+
+        return str_pad($coord, 32, "\x00", STR_PAD_LEFT);
+    }
+
     private static function hkdf($salt, $ikm, $info, $length)
     {
         $prk = hash_hmac('sha256', $ikm, $salt, true);
@@ -138,6 +186,10 @@ class BMPushWeb
 
     private static function publicKeyToPem($rawKey)
     {
+        if (strlen($rawKey) !== 65 || $rawKey[0] !== "\x04") {
+            return false;
+        }
+
         $der = "\x30\x59\x30\x13\x06\x07\x2a\x86\x48\xce\x3d\x02\x01\x06\x08\x2a\x86\x48\xce\x3d\x03\x01\x07\x03\x42\x00".$rawKey;
 
         return "-----BEGIN PUBLIC KEY-----\n"
