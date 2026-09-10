@@ -101,6 +101,7 @@ function webdiskPreviewFileUrl(fileOrId, inline)
 {
 	var file = (typeof fileOrId === 'object' && fileOrId !== null) ? fileOrId : null;
 	var id = file ? file.id : fileOrId;
+	var url;
 
 	if(file && file.isMail && typeof mailAttachmentDownloadUrl === 'function')
 		return(mailAttachmentDownloadUrl(file.mailId, file.attachment, inline));
@@ -111,7 +112,12 @@ function webdiskPreviewFileUrl(fileOrId, inline)
 	if(file && file.isMail && typeof mailAttachmentDownloadUrl === 'function')
 		return(mailAttachmentDownloadUrl(file.mailId, file.attachment, inline));
 
-	return 'webdisk.php?action=downloadFile&id=' + id + (inline ? '&view=true' : '') ;
+	url = 'webdisk.php?action=downloadFile&id=' + encodeURIComponent(id) + (inline ? '&view=true' : '');
+	if(typeof bmLegacyApiUrl === 'function')
+		return(bmLegacyApiUrl(url));
+	if(typeof bmAppendSession === 'function')
+		return(bmAppendSession(url));
+	return url;
 }
 
 function webdiskPreviewEscapeHtml(str)
@@ -300,6 +306,7 @@ function webdiskPreviewDownloadUrl(fileOrId)
 {
 	var file = (typeof fileOrId === 'object' && fileOrId !== null) ? fileOrId : null;
 	var id = file ? file.id : fileOrId;
+	var url;
 
 	if(file && file.isMail && typeof mailAttachmentDownloadUrl === 'function')
 		return(mailAttachmentDownloadUrl(file.mailId, file.attachment, false));
@@ -310,7 +317,12 @@ function webdiskPreviewDownloadUrl(fileOrId)
 	if(file && file.isMail && typeof mailAttachmentDownloadUrl === 'function')
 		return(mailAttachmentDownloadUrl(file.mailId, file.attachment, false));
 
-	return 'webdisk.php?action=downloadFile&id=' + id ;
+	url = 'webdisk.php?action=downloadFile&id=' + encodeURIComponent(id);
+	if(typeof bmLegacyApiUrl === 'function')
+		return(bmLegacyApiUrl(url));
+	if(typeof bmAppendSession === 'function')
+		return(bmAppendSession(url));
+	return url;
 }
 
 function webdiskPreviewConfirmClose()
@@ -810,10 +822,20 @@ function webdiskPreviewShowLoading(textMode)
 
 function webdiskPreviewEnsurePdfWorker()
 {
+	var workerSrc;
+
 	if(_wdPreview.pdfWorkerReady || typeof pdfjsLib === 'undefined')
 		return;
 
-	pdfjsLib.GlobalWorkerOptions.workerSrc = 'clientlib/pdfjs/pdf.worker.min.js';
+	/* Absolute URL: relative paths break under pretty URLs (e.g. /mail/…) and
+	   the worker request is rewritten to app.php HTML → Unexpected token '<'. */
+	workerSrc = 'clientlib/pdfjs/pdf.worker.min.js';
+	if(typeof bmJoinApiBase === 'function')
+		workerSrc = bmJoinApiBase(workerSrc);
+	else if(workerSrc.charAt(0) !== '/')
+		workerSrc = '/' + workerSrc;
+
+	pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
 	_wdPreview.pdfWorkerReady = true;
 }
 

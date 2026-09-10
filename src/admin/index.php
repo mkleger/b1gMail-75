@@ -108,26 +108,16 @@ if(isset($_REQUEST['action']) && $_REQUEST['action']=='login')
 						$adminUserRow['last_try'] = 0;
 						$db->Query('UPDATE {pre}admins SET `last_try`=0 WHERE `adminid`=?', $adminUserRow['adminid']);
 					}
-					$md5saltlogin=0;
-					if(hash_equals((string)$adminUserRow['password'], md5($pw.$adminUserRow['password_salt']))) { // Update old passwords
-						$newPW = PasswordHashCreate($pw, 'admin');
-						$db->Query('UPDATE {pre}admins SET `password`=?,`password_salt`=? WHERE `adminid`=?', 
-							$newPW, '', $adminUserRow['adminid']); // try update
-						$res = $db->Query('SELECT `adminid`,`username`,`password`,`password_salt`,`last_try` FROM {pre}admins WHERE `username`=?',
-						$username); // check length
-						$lengthrow = $res->FetchArray(MYSQLI_ASSOC);
-						if($newPW != $lengthrow['password']) { // make rollback
-							$db->Query('UPDATE {pre}admins SET `password`=?,`password_salt`=? WHERE `adminid`=?', 
-							$adminUserRow['password'], $adminUserRow['password_salt'], $adminUserRow['adminid']);
-							$md5saltlogin=1;
-						}
-						else {
-							$adminUserRow['password'] = $newPW;
-						}
-					}
-					if(password_verify($pw, $adminUserRow['password']) || $md5saltlogin==1)
+					$legacyOk = hash_equals((string)$adminUserRow['password'], md5($pw.$adminUserRow['password_salt']));
+					$modernOk = PasswordHashIsModern($adminUserRow['password']) && password_verify($pw, $adminUserRow['password']);
+					if($legacyOk || $modernOk)
 					{
-						$upgradedHash = PasswordHashUpgradeAdmin((int)$adminUserRow['adminid'], $pw, $adminUserRow['password']);
+						$upgradedHash = PasswordHashUpgradeAdmin(
+							(int)$adminUserRow['adminid'],
+							$pw,
+							$adminUserRow['password'],
+							isset($adminUserRow['password_salt']) ? $adminUserRow['password_salt'] : ''
+						);
 						if($upgradedHash !== false)
 							$adminUserRow['password'] = $upgradedHash;
 
@@ -231,21 +221,10 @@ if(isset($_REQUEST['action']) && $_REQUEST['action']=='login')
 		}
 	}
 }
-else if(isset($_REQUEST['action']) && $_REQUEST['action']=='logout')
+else if(isset($_REQUEST['action']) && RouteRestoreLegacyAction((string)$_REQUEST['action']) === 'logout')
 {
-	RequestPrivileges(PRIVILEGES_ADMIN);
-	$adminId = isset($_SESSION['bm_adminID']) ? (int) $_SESSION['bm_adminID'] : 0;
-	if ($adminId > 0) {
-		if (!class_exists('BMPush', false)) {
-			@include_once B1GMAIL_DIR.'serverlib/push.class.php';
-		}
-		if (class_exists('BMPush', false) && BMPush::isEnabled()) {
-			BMPush::unsubscribeAll(BMPush::AREA_ADMIN, $adminId);
-		}
-	}
-	$_SESSION = array();
-	session_destroy();
-	SessionRedirect('index.php');
+	SessionHandleAdminLogout();
+	exit();
 }
 
 if(isset($_REQUEST['jump']))

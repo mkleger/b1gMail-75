@@ -131,7 +131,7 @@
 		<i class="ti ti-arrows-double-ne-sw icon" aria-hidden="true"></i>
 		{lng p="replyall"}
 	</button>
-	<button type="button" class="btn btn-sm btn-ghost-secondary" onclick="document.location.href='email.compose.php?forward={$mailID}{$sessionUrlSuffix}';">
+	<button type="button" class="btn btn-sm btn-ghost-secondary" onclick="document.location.href='{sessionurl file='email.compose.php' params="forward={$mailID}"}';">
 		<i class="ti ti-arrow-forward-up icon" aria-hidden="true"></i>
 		{lng p="forward"}
 	</button>
@@ -154,8 +154,10 @@
 {include file="li/email.calendar.invite.tpl"}
 {/if}
 
+<input type="hidden" id="previewMailID" value="{$mailID}" />
+<input type="hidden" id="previewTextMode" value="{$textMode|escape:'html'}" />
+<input type="hidden" id="previewEnableExternal" value="{if $enableExternal}1{else}0{/if}" />
 <iframe width="100%" style="height:200px;" id="textArea" name="textArea" src="about:blank" class="mailHTMLText" frameborder="no"></iframe>
-<textarea id="textArea_raw" style="display:none;">{text allowEmpty=true value=$text allowDoubleEnc=true}</textarea>
 
 {if $attachments}
 <div class="bm-mail-attachments-footer">
@@ -164,7 +166,7 @@
 </div>
 {/if}
 
-<form id="quoteForm" action="email.compose.php?reply={$mailID}{$sessionUrlSuffix}" method="post">
+<form id="quoteForm" action="{sessionurl file='email.compose.php' params="reply={$mailID}"}" method="post">
 	{csrffield}
 	<input type="hidden" name="text" id="quoteText" value="" />
 </form>

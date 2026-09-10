@@ -1,11 +1,15 @@
 RewriteEngine On
-RewriteBase /admin/
+# No RewriteBase: keep admin pretty URLs inside the install (e.g. /b1gmail/admin/).
+# RewriteBase /b1gmail/admin/
 Options -MultiViews
 
 # Keep direct access to existing files/directories
 RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
 RewriteRule ^ - [L]
+
+# Nested pretty URLs must not serve HTML for the Service Worker
+RewriteRule (^|/)sw\.js$ sw.js [L]
 
 # Admin pretty URLs -> admin front controller
 RewriteRule ^ app.php [QSA,L]

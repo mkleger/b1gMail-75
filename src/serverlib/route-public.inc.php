@@ -34,7 +34,62 @@ function RoutePublicNeedsFrontController()
 }
 
 /**
+ * Host from the current request (no port).
+ *
+ * @return string
+ */
+function RouteRequestHost()
+{
+	$host = isset($_SERVER['HTTP_HOST']) ? (string)$_SERVER['HTTP_HOST'] : '';
+	$host = strtolower(preg_replace('/:\d+$/', '', $host));
+	return $host;
+}
+
+/**
+ * True if two hosts are the same or a www / non-www pair.
+ *
+ * @param string $a
+ * @param string $b
+ * @return bool
+ */
+function RouteHostsAreWwwAliases($a, $b)
+{
+	$a = strtolower((string)$a);
+	$b = strtolower((string)$b);
+	if($a === '' || $b === '')
+		return false;
+	if($a === $b)
+		return true;
+
+	return $a === 'www.' . $b || $b === 'www.' . $a;
+}
+
+/**
+ * Replace the host of an absolute URL.
+ *
+ * @param string $url
+ * @param string $host
+ * @return string
+ */
+function RouteUrlWithHost($url, $host)
+{
+	$parts = parse_url((string)$url);
+	if(!is_array($parts) || empty($parts['host']) || $host === '')
+		return $url;
+
+	$scheme = isset($parts['scheme']) ? $parts['scheme'] : 'https';
+	$port = isset($parts['port']) ? ':' . $parts['port'] : '';
+	$path = isset($parts['path']) ? $parts['path'] : '/';
+	$query = isset($parts['query']) ? '?' . $parts['query'] : '';
+
+	return $scheme . '://' . $host . $port . $path . $query;
+}
+
+/**
  * Install root URL (trailing slash), honouring HTTPS / ssl_url (reverse proxy safe).
+ *
+ * www and the bare domain are treated as the same site: asset and link URLs
+ * follow the host of the current request so the two origins cannot diverge.
  *
  * @return string
  */
@@ -61,7 +116,14 @@ function RouteInstallRootUrl()
 		$url = $scheme . '://' . $_SERVER['HTTP_HOST'] . '/';
 	}
 
-	return rtrim($url, '/') . '/';
+	$url = rtrim($url, '/') . '/';
+
+	$reqHost = RouteRequestHost();
+	$cfgHost = parse_url($url, PHP_URL_HOST);
+	if($reqHost !== '' && is_string($cfgHost) && RouteHostsAreWwwAliases($reqHost, $cfgHost))
+		$url = rtrim(RouteUrlWithHost($url, $reqHost), '/') . '/';
+
+	return $url;
 }
 
 /**
@@ -224,7 +286,7 @@ function RouteParsePublicPathFromRequest()
 		return '';
 
 	$path = rawurldecode($path);
-	$prefix = RouteAdminUrlPrefix();
+	$prefix = RouteInstallUrlPrefix();
 	if($prefix !== '' && strpos($path, $prefix) === 0)
 		$path = substr($path, strlen($prefix));
 	$path = trim($path, '/');
@@ -245,7 +307,7 @@ function RouteParsePublicRawSegmentsFromRequest()
 		return array();
 
 	$path = rawurldecode($path);
-	$prefix = RouteAdminUrlPrefix();
+	$prefix = RouteInstallUrlPrefix();
 	if($prefix !== '' && strpos($path, $prefix) === 0)
 		$path = substr($path, strlen($prefix));
 	$path = trim($path, '/');
@@ -462,6 +524,10 @@ function RouteOrganizerParamsFromRest($module, array $rest)
 {
 	$params = array();
 	if(empty($rest))
+		return $params;
+
+	// Relative "organizer.notes.php" under /organizer/notes/ must not overwrite ?action=
+	if(preg_match('/\.php$/i', (string)$rest[0]))
 		return $params;
 
 	$params['action'] = RouteOrganizerSegmentToAction($module, $rest[0]);
@@ -822,6 +888,8 @@ function RoutePublicPathFromLegacy($script, array $params)
 			return $pluginLegacy;
 
 		$action = isset($params['action']) ? RouteNormalizePathSegment((string)$params['action']) : '';
+		if($action === 'faxplugin')
+			return array('path' => 'start/fax', 'extra' => RoutePublicFilterExtraParams($params, array('action')));
 		if($action === '')
 			return array('path' => 'start', 'extra' => RoutePublicFilterExtraParams($params, array('action')));
 		return array('path' => 'start/' . $action, 'extra' => RoutePublicFilterExtraParams($params, array('action')));
@@ -837,6 +905,10 @@ function RoutePublicPathFromLegacy($script, array $params)
 
 	if($script === 'email.read.php')
 	{
+		$action = isset($params['action']) ? (string)$params['action'] : '';
+		if($action !== '' && $action !== 'read')
+			return null;
+
 		if(isset($params['id']) && (string)$params['id'] !== '')
 		{
 			return array(
@@ -1071,7 +1143,7 @@ function AssignTemplatePublicNavUrls($tpl)
 	$tpl->assign('nliUrlHome', PublicNavUrl('index.php'));
 	$loginUrl = PublicNavUrl('index.php?action=login', 'ssl_login_enable');
 	if($loginUrl === '' || stripos($loginUrl, '.php') !== false)
-		$loginUrl = '/login';
+		$loginUrl = PublicNavRelativePath(PublicPublicUrl('login'));
 	$tpl->assign('nliUrlLogin', $loginUrl);
 	$tpl->assign('nliUrlSignup', PublicNavUrl('index.php?action=signup'));
 	$tpl->assign('nliUrlSignupSsl', PublicNavUrl('index.php?action=signup', 'ssl_signup_enable'));
@@ -1281,7 +1353,11 @@ function AssignTemplatePublicRouteVars($tpl)
 
 	global $bm_prefs;
 
-	$tpl->assign('tpldir', PublicFqdnSelfUrl() . 'templates/' . $bm_prefs['template'] . '/');
+	$theme = $tpl->getTemplateVars('_tplname');
+	if(!is_string($theme) || $theme === '')
+		$theme = $bm_prefs['template'];
+
+	$tpl->assign('tpldir', PublicFqdnSelfUrl() . 'templates/' . $theme . '/');
 }
 
 RouteRegisterMatcher('RouteMatchResetPassword', 'RouteLegacyResetPassword', 30);

@@ -305,7 +305,7 @@ else if($_REQUEST['action'] == 'downloadFile'
 			header('Pragma: public');
 			header('Content-Type: ' . $fileInfo['contenttype']);
 			header('Content-Length: ' . $fileInfo['size']);
-			header('Content-Disposition: ' . (isset($_REQUEST['view']) ? 'inline' : 'attachment') . '; filename="' . addslashes($fileInfo['dateiname']) . '"');
+			SendContentDispositionHeader(isset($_REQUEST['view']) ? 'inline' : 'attachment', $fileInfo['dateiname']);
 			Add2Stat('wd_down', ceil($fileInfo['size']/1024));
 			SendFileFP(BMBlobStorage::CreateProvider($fileInfo['blobstorage'], $userRow['id'])->loadBlob(BMBLOB_TYPE_WEBDISK, $fileInfo['id']),
 				$speedLimit);

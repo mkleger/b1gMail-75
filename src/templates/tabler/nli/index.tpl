@@ -1,5 +1,6 @@
 <!doctype html>
-<html lang="{lng p="langCode"}">
+<!-- bm-theme: {$_tplname|default:'unknown'} -->
+<html lang="{lng p="langCode"}" data-bm-theme="{$_tplname|default:'unknown'}">
 
 <head>
 	<meta charset="{$charset}" />
@@ -45,7 +46,7 @@
 </head>
 
 {include file="nli/layout.vars.tpl" scope=parent}
-<body class="nli-body{if $nliCompactLayout && $page!='nli/login.tpl'} nli-msp-layout{/if}{if $page=='nli/login.tpl' && $nliStyle!='msp'} nli-login-layout nli-login-{$nliStyle|default:'cover'}{if $nliStyle=='cover' || $nliStyle=='minimal'} d-flex flex-column bg-white{/if}{/if}">
+<body class="nli-body{if $nliCompactLayout && $page!='nli/login.tpl'} nli-msp-layout{/if}{if $page=='nli/login.tpl' && $nliStyle!='msp'} nli-login-layout nli-login-{$nliStyle|default:'cover'}{if $nliStyle=='cover' || $nliStyle=='minimal'} d-flex flex-column bg-white{/if}{/if}" data-bm-theme="{$_tplname|default:'unknown'}">
 	{hook id="nli:index.tpl:beforeContent"}
 
 	{if !$nliCompactLayout && $page!='nli/login.tpl'}
@@ -101,6 +102,7 @@
 							{if $welcomeBack}
 							<input type="hidden" name="email_full" value="{$smarty.cookies.bm_savedUser}" />
 							<input type="hidden" name="password" value="" />
+							<input type="hidden" name="savelogin" value="1" />
 							{if $smarty.cookies.bm_savedSSL}<input type="hidden" name="ssl" value="true" />{/if}
 
 							<div class="btn-group">
@@ -148,6 +150,10 @@
 												<input type="password" name="password" id="password_p" class="form-control" placeholder="{lng p="password"}" required="true" />
 											</div>
 										</div>
+										<label class="form-check mb-3">
+											<input type="checkbox" class="form-check-input" name="savelogin" id="savelogin_p" value="1"{if $savelogin} checked="checked"{/if} />
+											<span class="form-check-label">{lng p="savelogin"}</span>
+										</label>
 										{if $ssl_login_option}
 										<label class="form-check mb-3">
 											<input type="checkbox" class="form-check-input" id="ssl_p"{if $ssl_login_enable} checked="checked"{/if} onchange="updateFormSSL(this)" onclick="updateFormSSL(this)" />

@@ -136,6 +136,7 @@ if($_REQUEST['action'] == 'start')
 		$tpl->assign('pageContent', 'li/organizer.todo.tpl');
 		$tpl->display('li/index.tpl');
 	}
+	exit();
 }
 
 /**
@@ -212,6 +213,7 @@ else if($_REQUEST['action'] == 'addTask')
 	$tpl->assign('pageTitle', $lang_user['addtask']);
 	$tpl->assign('pageContent', 'li/organizer.todo.edit.tpl');
 	$tpl->display('li/index.tpl');
+	exit();
 }
 
 /**
@@ -252,6 +254,7 @@ else if($_REQUEST['action'] == 'editTask'
 		$tpl->assign('pageContent', 'li/organizer.todo.edit.tpl');
 		$tpl->assign('task', $taskInfo);
 		$tpl->display('li/index.tpl');
+		exit();
 	}
 }
 
@@ -280,4 +283,5 @@ else if($_REQUEST['action'] == 'saveTask'
 				$taskListID);
 	SessionRedirect('organizer.todo.php?taskListID='.$taskListID);
 }
-?>
+
+SessionRedirect('organizer.todo.php');

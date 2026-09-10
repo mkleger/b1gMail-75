@@ -20,8 +20,8 @@
  */
 
 // extract version
-$databaseStructureVersion = '1.79';
-define('DATABASE_STRUCT_HASH', '29406251ccf69505afc050c5993ab8ef4f7a2c052ca6c386afdd746ce81e0648');
+$databaseStructureVersion = '1.80';
+define('DATABASE_STRUCT_HASH', '710c10cf22682c84d10b4c97ca5b6a1df459d394daeb683ab6b49766e2bc1a6d');
 
 // structure
 $databaseStructure = file_get_contents(__DIR__.'/database.struct.json');

@@ -25,56 +25,12 @@ class BMPush
     private static $schemaChecked = false;
 
     /**
-     * Ensure DB table and prefs columns exist.
+     * Schema lives in database.struct.json (SyncDBStruct / setup update).
+     * Kept as no-op so existing call sites stay safe.
      */
     public static function ensureSchema()
     {
-        global $db;
-
-        if (self::$schemaChecked) {
-            return;
-        }
         self::$schemaChecked = true;
-
-        global $mysql;
-
-        $table = $mysql['prefix'].'push_subscriptions';
-        $res = $db->Query('SHOW TABLES LIKE ?', $table);
-        if ($res->RowCount() == 0) {
-            $db->Query(
-                'CREATE TABLE `'.$table.'` (
-                    `id` int(11) NOT NULL AUTO_INCREMENT,
-                    `area` enum(\'user\',\'admin\') NOT NULL DEFAULT \'user\',
-                    `userid` int(11) NOT NULL DEFAULT 0,
-                    `adminid` int(11) NOT NULL DEFAULT 0,
-                    `endpoint` varchar(768) NOT NULL,
-                    `p256dh` varchar(255) NOT NULL,
-                    `auth` varchar(255) NOT NULL,
-                    `user_agent` varchar(255) NOT NULL DEFAULT \'\',
-                    `created` int(11) NOT NULL DEFAULT 0,
-                    PRIMARY KEY (`id`),
-                    KEY `area_user` (`area`,`userid`),
-                    KEY `area_admin` (`area`,`adminid`),
-                    KEY `endpoint` (`endpoint`(191))
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
-            );
-        }
-        $res->Free();
-
-        $prefsTable = $mysql['prefix'].'prefs';
-        $columns = [
-            'push_enabled' => "enum('yes','no') NOT NULL DEFAULT 'no'",
-            'push_vapid_public' => "text NOT NULL DEFAULT ''",
-            'push_vapid_private' => "text NOT NULL DEFAULT ''",
-            'push_vapid_subject' => "varchar(255) NOT NULL DEFAULT ''",
-        ];
-        foreach ($columns as $col => $def) {
-            $res = $db->Query('SHOW COLUMNS FROM `'.$prefsTable.'` LIKE ?', $col);
-            if ($res->RowCount() == 0) {
-                $db->Query('ALTER TABLE `'.$prefsTable.'` ADD `'.$col.'` '.$def);
-            }
-            $res->Free();
-        }
     }
 
     /**
@@ -96,20 +52,19 @@ class BMPush
     {
         global $bm_prefs;
 
-        self::ensureSchema();
-        ReadConfig();
-
         return isset($bm_prefs['push_enabled']) && $bm_prefs['push_enabled'] == 'yes'
             && self::hasVapidKeys();
     }
 
     public static function getPublicKey()
     {
-        global $bm_prefs;
+        // Must match the key used for VAPID signing (derived from private key).
+        $vapid = self::loadVapidCredentials();
+        if ($vapid === false) {
+            return '';
+        }
 
-        ReadConfig();
-
-        return isset($bm_prefs['push_vapid_public']) ? trim($bm_prefs['push_vapid_public']) : '';
+        return BMPushVapid::base64UrlEncode($vapid['public']);
     }
 
     /**
@@ -120,9 +75,6 @@ class BMPush
     public static function loadVapidCredentials()
     {
         global $bm_prefs, $db;
-
-        self::ensureSchema();
-        ReadConfig();
 
         $privatePem = BMPushVapid::normalizePrivateKeyPem(
             isset($bm_prefs['push_vapid_private']) ? $bm_prefs['push_vapid_private'] : ''
@@ -156,7 +108,24 @@ class BMPush
 
         $subject = !empty($bm_prefs['push_vapid_subject'])
             ? trim($bm_prefs['push_vapid_subject'])
-            : 'mailto:noreply@localhost';
+            : '';
+        // FCM/Mozilla reject weak localhost subjects → HTTP 403, silent non-delivery.
+        if ($subject === ''
+            || stripos($subject, '@localhost') !== false
+            || !preg_match('#^(mailto:|https://)#i', $subject)) {
+            $host = 'localhost';
+            if (!empty($bm_prefs['selfurl'])) {
+                $parsedHost = parse_url($bm_prefs['selfurl'], PHP_URL_HOST);
+                if (is_string($parsedHost) && $parsedHost !== '') {
+                    $host = $parsedHost;
+                }
+            }
+            if ($host !== '' && strcasecmp($host, 'localhost') !== 0) {
+                $subject = 'mailto:noreply@'.$host;
+            } elseif ($subject === '' || !preg_match('#^(mailto:|https://)#i', $subject)) {
+                $subject = 'mailto:noreply@localhost';
+            }
+        }
 
         return [
             'private' => $privatePem,
@@ -171,8 +140,6 @@ class BMPush
     public static function generateVapidKeys($subject = '')
     {
         global $db, $bm_prefs;
-
-        self::ensureSchema();
 
         if (!self::canGenerateKeys()) {
             return false;
@@ -215,8 +182,6 @@ class BMPush
     public static function subscribe($area, $targetId, $subscription)
     {
         global $db;
-
-        self::ensureSchema();
 
         if (!self::isEnabled() || !is_array($subscription)) {
             return false;
@@ -291,8 +256,6 @@ class BMPush
     {
         global $db;
 
-        self::ensureSchema();
-
         $db->Query(
             'DELETE FROM {pre}push_subscriptions WHERE `area`=? AND `endpoint`=? AND '
             .($area == self::AREA_USER ? '`userid`=?' : '`adminid`=?'),
@@ -313,8 +276,6 @@ class BMPush
     public static function unsubscribeAll($area, $targetId)
     {
         global $db;
-
-        self::ensureSchema();
 
         $targetId = (int) $targetId;
         if ($targetId <= 0) {
@@ -384,6 +345,7 @@ class BMPush
         }
 
         $skipPrefCheck = !empty($message['skipPrefCheck']);
+        $skipSessionCheck = !empty($message['skipSessionCheck']);
 
         if (!$skipPrefCheck && $area == self::AREA_USER && !self::userAllowsType($targetId, $type)) {
             $prefs = self::getUserPushPrefs($targetId);
@@ -404,14 +366,17 @@ class BMPush
             return ['sent' => 0, 'failed' => 0, 'removed' => 0, 'reason' => 'prefs_blocked'];
         }
 
-        $pushSessionState = $area == self::AREA_USER
-            ? SessionUserGetPushSessionState($targetId)
-            : ($area == self::AREA_ADMIN ? SessionAdminGetPushSessionState($targetId) : 'none');
+        $pushSessionState = 'active';
+        if (!$skipSessionCheck) {
+            $pushSessionState = $area == self::AREA_USER
+                ? SessionUserGetPushSessionState($targetId)
+                : ($area == self::AREA_ADMIN ? SessionAdminGetPushSessionState($targetId) : 'none');
 
-        if ($pushSessionState === 'none') {
-            self::logPushResult($targetId, $type, 0, 0, self::countSubscriptions($area, $targetId), 'no_active_session');
+            if ($pushSessionState === 'none') {
+                self::logPushResult($targetId, $type, 0, 0, self::countSubscriptions($area, $targetId), 'no_active_session');
 
-            return ['sent' => 0, 'failed' => 0, 'removed' => 0, 'reason' => 'no_active_session'];
+                return ['sent' => 0, 'failed' => 0, 'removed' => 0, 'reason' => 'no_active_session'];
+            }
         }
 
         $payload = [
@@ -493,7 +458,7 @@ class BMPush
             } else {
                 ++$failed;
                 $lastError = isset($result['error']) ? $result['error'] : 'delivery_failed';
-                if (!empty($result['status'])) {
+                if (!empty($result['status']) && strpos($lastError, (string) $result['status']) === false) {
                     $lastError .= '_'.$result['status'];
                 }
                 if (in_array($result['status'], [401, 403, 404, 410], true)) {
@@ -543,8 +508,6 @@ class BMPush
     public static function countSubscriptions($area, $targetId)
     {
         global $db;
-
-        self::ensureSchema();
 
         $res = $db->Query(
             'SELECT COUNT(*) AS c FROM {pre}push_subscriptions WHERE `area`=? AND '
@@ -688,6 +651,7 @@ class BMPush
             'targetId' => (int) $userId,
             'type' => self::TYPE_MAIL,
             'skipPrefCheck' => true,
+            'skipSessionCheck' => true,
             'title' => $title,
             'body' => $body,
             'url' => 'start.php',

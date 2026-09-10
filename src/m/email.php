@@ -214,8 +214,7 @@ else if($_REQUEST['action'] == 'attachment'
 				$viewable_or_attachment = 'inline';
 			}
 			// 2024-05-02 End Check if it is a viewable type
-			header(sprintf('Content-Disposition: %s; filename="%s"',$viewable_or_attachment,
-						addslashes($part['filename'])));
+			SendContentDispositionHeader($viewable_or_attachment, $part['filename']);
 
 			$attData = &$part['body'];
 			$attData->Init();
@@ -569,8 +568,7 @@ else if($_REQUEST['action'] == 'sendMail')
  */
 else if($_REQUEST['action'] == 'logout')
 {
-	$thisUser->Logout();
-	header('Location: ./index.php');
+	SessionHandleUserLogout();
 	exit();
 }
 ?>

@@ -534,9 +534,8 @@ else if($_REQUEST['action'] == 'saveContact'
 
 		// headers
 		header('Pragma: public');
-		header(sprintf('Content-Disposition: attachment; filename="%s %s.vcf"',
-			$_REQUEST['vorname'],
-			$_REQUEST['nachname']));
+		SendContentDispositionHeader('attachment',
+			trim((string)$_REQUEST['vorname'] . ' ' . (string)$_REQUEST['nachname']) . '.vcf');
 		header('Content-Type: text/x-vcard; charset=' . $currentCharset);
 		header(sprintf('Content-Length: %d',
 			strlen($vcfData)));

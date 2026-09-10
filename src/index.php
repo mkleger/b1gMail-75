@@ -1060,9 +1060,7 @@ else if($_REQUEST['action'] == 'readCertMail'
 					header('Content-Type: ' . $part['content-type'] . '; charset=' . $part['charset']);
 				else
 					header('Content-Type: ' . $part['content-type']);
-				header(sprintf('Content-Disposition: %s; filename="%s"',
-							'attachment',
-							addslashes($part['filename'])));
+				SendContentDispositionHeader('attachment', $part['filename']);
 
 				$attData = &$part['body'];
 				$attData->Init();
@@ -1481,6 +1479,10 @@ else
 {
 	if(isset($_REQUEST['do']) && $_REQUEST['do']=='login')
 	{
+		// client timezone before Login() so last_timezone / MFA meta stay correct
+		if(isset($_REQUEST['timezone']) && $_REQUEST['timezone'] !== '' && is_numeric($_REQUEST['timezone']))
+			$_SESSION['bm_timezone'] = (int)$_REQUEST['timezone'];
+
 		// get login (plaintext only; never accept passwordMD5)
 		$password 	= isset($_POST['password']) && (string)$_POST['password'] !== ''
 						? AjaxCharsetDecode($_POST['password'])
@@ -1491,15 +1493,30 @@ else
 		if($password === '')
 			$password = SessionPendingLoginPassword($email);
 
+		$requiresValidation	 = BMUser::RequiresValidation($email);
+		$ValidationCode	 	= $requiresValidation && isset($_REQUEST['sms_validation_code'])
+								? $_REQUEST['sms_validation_code']
+								: '';
+
 		// saved login?
 		$result = null;
-		if($password == '' && isset($_COOKIE['bm_savedToken']))
+		if(!empty($_REQUEST['impersonate']))
+		{
+			ob_start();
+			list($result, $param) = BMUser::Login($email, $password, true, true, $ValidationCode);
+			ob_end_clean();
+		}
+		else if($password == '' && isset($_COOKIE['bm_savedToken']))
 		{
 			$remember = BMUser::ValidateRememberMe($_COOKIE['bm_savedToken']);
 			if($remember !== false)
 			{
+				$trusted = BMMfa::RememberMeMaySkipVerify(
+					(int)$remember['userID'],
+					isset($remember['expires']) ? (int)$remember['expires'] : 0
+				);
 				ob_start();
-				list($result, $param) = BMUser::LoginByUserID($remember['userID'], true, true);
+				list($result, $param) = BMUser::LoginByUserID($remember['userID'], true, true, false, $trusted);
 				ob_end_clean();
 			}
 			else
@@ -1508,12 +1525,6 @@ else
 				BMSecureSetCookie('bm_savedToken', '', time() - TIME_ONE_HOUR);
 			}
 		}
-
-		// validation
-		$requiresValidation	 = BMUser::RequiresValidation($email);
-		$ValidationCode	 	= $requiresValidation && isset($_REQUEST['sms_validation_code'])
-								? $_REQUEST['sms_validation_code']
-								: '';
 
 		// login
 		if($result === null)
@@ -1533,6 +1544,9 @@ else
 
 			if(BMMfa::GetPending() && empty($_SESSION['bm_userLoggedIn']))
 			{
+				if(isset($_REQUEST['timezone']) && $_REQUEST['timezone'] !== '' && is_numeric($_REQUEST['timezone']))
+					$_SESSION['bm_timezone'] = (int)$_REQUEST['timezone'];
+
 				if(isset($_REQUEST['ajax']))
 					IndexLoginJsonResponse(array(
 						'action' => 'redirect',
@@ -1576,10 +1590,10 @@ else
 				BMSecureSetCookie('bm_savedSSL', '', time() - TIME_ONE_HOUR);
 			}
 
-			// register timezone
-			$_SESSION['bm_timezone'] = isset($_REQUEST['timezone'])
-										? (int)$_REQUEST['timezone']
-										: date('Z');
+			// register timezone (again after successful session create)
+			$_SESSION['bm_timezone'] = ResolveClientTimezoneOffset(
+				isset($_SESSION['bm_timezone']) ? $_SESSION['bm_timezone'] : null
+			);
 
 			if(!empty($_SESSION['bm_userID']))
 			{
@@ -1839,5 +1853,7 @@ if(!SessionAssignLoginPageActive('user'))
 		$tpl->assign('welcomeBack', FALSE);
 	}
 }
+
+$tpl->assign('savelogin', isset($_POST['savelogin']));
 
 $tpl->display('nli/index.tpl');

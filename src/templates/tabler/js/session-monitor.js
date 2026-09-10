@@ -5,6 +5,26 @@
 	var cfg = bmSessionConfig;
 	var warnShown = false;
 	var lockedShown = false;
+	var stopped = false;
+	var pollTimer = null;
+
+	function stopSessionMonitor() {
+		stopped = true;
+		if(pollTimer)
+		{
+			clearInterval(pollTimer);
+			pollTimer = null;
+		}
+	}
+
+	function isLogoutUrl(url) {
+		if(!url)
+			return false;
+		url = String(url).toLowerCase();
+		return url.indexOf('action=logout') !== -1
+			|| /\/logout(?:\?|#|$)/.test(url)
+			|| /\/start\/logout(?:\?|#|$)/.test(url);
+	}
 
 	function csrfTokenValue() {
 		if(typeof bmCsrfToken !== 'undefined' && bmCsrfToken)
@@ -48,6 +68,8 @@
 			var base = cfg.apiBase || '';
 			if(base !== '')
 				url = base.replace(/\/?$/, '/') + url.replace(/^\.\//, '');
+			else
+				url = '/' + String(url).replace(/^\.\//, '');
 		}
 		/* Match PHP SessionUrlSidEnabled(): only with urlCompat and without cookie mode */
 		if(!cfg.urlCompat || cfg.cookieMode)
@@ -65,7 +87,10 @@
 		var base = cfg.apiBase || '';
 		var path = cfg.apiUrl || 'start.php';
 		var url = (base !== '' ? base : '') + path;
-		return appendSid(url + (url.indexOf('?') !== -1 ? '&' : '?') + 'action=' + encodeURIComponent(action));
+		url = appendSid(url + (url.indexOf('?') !== -1 ? '&' : '?') + 'action=' + encodeURIComponent(action));
+		if(typeof clientTZ !== 'undefined')
+			url += (url.indexOf('?') !== -1 ? '&' : '?') + 'timezone=' + encodeURIComponent(String(clientTZ));
+		return url;
 	}
 
 	function showWarnModal() {
@@ -101,11 +126,24 @@
 		}
 	}
 
+	function timezoneBody(body) {
+		body = body || '';
+		if(typeof clientTZ === 'undefined')
+			return body;
+		return body + (body ? '&' : '') + 'timezone=' + encodeURIComponent(String(clientTZ));
+	}
+
 	function doSessionKeepAlive() {
-		return sessionFetch('sessionKeepAlive', { method: 'POST', body: '' }).then(function(result) {
+		return sessionFetch('sessionKeepAlive', { method: 'POST', body: timezoneBody('') }).then(function(result) {
 			if(result.data && result.data.ok)
 			{
 				hideWarnModal();
+				if(result.data.timezoneSynced && !window._bmTimezoneReloaded)
+				{
+					window._bmTimezoneReloaded = true;
+					window.location.reload();
+					return;
+				}
 				pollStatus();
 			}
 		}).catch(function() {});
@@ -188,6 +226,9 @@
 	};
 
 	function sessionFetch(action, options) {
+		if(stopped)
+			return Promise.resolve({ ok: false, data: null, status: 0 });
+
 		options = options || {};
 		var fetchOpts = {
 			method: options.method || 'GET',
@@ -229,6 +270,13 @@
 		sessionFetch('sessionStatus').then(function(result) {
 			if(!result.data)
 				return;
+			applyCsrfTokenFromResponse(result.data);
+			if(result.data.timezoneSynced && !window._bmTimezoneReloaded)
+			{
+				window._bmTimezoneReloaded = true;
+				window.location.reload();
+				return;
+			}
 			if(result.res.status === 401 && handleSessionPayload(result.data, 401))
 				return;
 			if(result.data.sessionExpired || (result.res.status === 401 && result.data.sessionExpired))
@@ -399,11 +447,19 @@
 			}, { passive: true });
 		});
 
+		document.addEventListener('click', function(e) {
+			var link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+			if(link && isLogoutUrl(link.getAttribute('href')))
+				stopSessionMonitor();
+		}, true);
+
+		window.addEventListener('pagehide', stopSessionMonitor);
+
 		var pollMs = 30000;
 		if(cfg.idleTimeout > 0)
 			pollMs = Math.max(15000, Math.min(60000, cfg.idleTimeout * 60 * 1000 / 2));
 
-		setInterval(pollStatus, pollMs);
+		pollTimer = setInterval(pollStatus, pollMs);
 		pollStatus();
 
 		if(document.body && document.body.classList.contains('bm-session-locked'))

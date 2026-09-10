@@ -50,7 +50,6 @@ if($_REQUEST['action'] == 'account')
 {
 	$displayPage = true;
 
-	EnsureAdminEmailColumn();
 
 	if(isset($_REQUEST['saveEmail']) && isset($_POST['email']))
 	{
@@ -103,7 +102,8 @@ if($_REQUEST['action'] == 'account')
 		else
 		{
 			$newPW = PasswordHashSetAdminPassword((int)$adminRow['adminid'], $_POST['newpw1']);
-			$_SESSION['bm_adminAuth'] = AdminSessionAuthBind($newPW, (int)$adminRow['adminid']);
+			if($newPW !== false)
+				$_SESSION['bm_adminAuth'] = AdminSessionAuthBind($newPW, (int)$adminRow['adminid']);
 		}
 	}
 
@@ -179,7 +179,13 @@ if($_REQUEST['action'] == 'account')
 				if($_POST['newpw1'] != '')
 				{
 					$pw = PasswordHashSetAdminPassword((int)$admin['adminid'], $_POST['newpw1']);
-					$salt = '';
+					if($pw === false)
+					{
+						$pw = $admin['password'];
+						$salt = $admin['password_salt'];
+					}
+					else
+						$salt = '';
 				}
 				else
 				{
@@ -236,7 +242,6 @@ if($_REQUEST['action'] == 'account')
 
 		if($displayPage)
 		{
-			EnsureAdminEmailColumn();
 
 			$pluginList = array();
 
@@ -305,7 +310,6 @@ if($_REQUEST['action'] == 'account')
 				}
 				else
 				{
-				EnsureAdminEmailColumn();
 				$db->Query('INSERT INTO {pre}admins(`username`,`firstname`,`lastname`,`email`,`password`,`password_salt`,`type`) VALUES(?,?,?,?,?,?,?)',
 					$_POST['username'],
 					$_POST['firstname'],
@@ -349,7 +353,6 @@ if($_REQUEST['action'] == 'account')
 
 		if($displayPage)
 		{
-			EnsureAdminEmailColumn();
 
 			$admins = array();
 			$res = $db->Query('SELECT `adminid`,`username`,`firstname`,`lastname`,`email`,`type` FROM {pre}admins ORDER BY `username` ASC');

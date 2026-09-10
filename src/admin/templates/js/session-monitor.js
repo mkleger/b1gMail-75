@@ -5,6 +5,26 @@
 	var cfg = bmSessionConfig;
 	var warnShown = false;
 	var lockedShown = false;
+	var stopped = false;
+	var pollTimer = null;
+
+	function stopSessionMonitor() {
+		stopped = true;
+		if(pollTimer)
+		{
+			clearInterval(pollTimer);
+			pollTimer = null;
+		}
+	}
+
+	function isLogoutUrl(url) {
+		if(!url)
+			return false;
+		url = String(url).toLowerCase();
+		return url.indexOf('action=logout') !== -1
+			|| /\/logout(?:\?|#|$)/.test(url)
+			|| /\/index\/logout(?:\?|#|$)/.test(url);
+	}
 
 	function csrfTokenValue() {
 		if(typeof bmCsrfToken !== 'undefined' && bmCsrfToken)
@@ -181,6 +201,9 @@
 	};
 
 	function sessionFetch(action, options) {
+		if(stopped)
+			return Promise.resolve({ ok: false, data: null, status: 0 });
+
 		options = options || {};
 		var fetchOpts = {
 			method: options.method || 'GET',
@@ -222,6 +245,7 @@
 		sessionFetch('sessionStatus').then(function(result) {
 			if(!result.data)
 				return;
+			applyCsrfTokenFromResponse(result.data);
 			if(result.res.status === 401 && handleSessionPayload(result.data, 401))
 				return;
 			if(result.data.sessionExpired || (result.res.status === 401 && result.data.sessionExpired))
@@ -293,14 +317,14 @@
 	if(typeof MakeXMLRequest === 'function')
 	{
 		var origMakeXMLRequest = MakeXMLRequest;
-		MakeXMLRequest = function(url, callback, param) {
+		MakeXMLRequest = function(url, callback, param, postBody) {
 			url = appendSid(url);
 			return origMakeXMLRequest(url, function(http, p) {
 				if(http.readyState === 4 && bmSessionHandleResponse(http))
 					return;
 				if(callback)
 					callback(http, p);
-			}, param);
+			}, param, postBody);
 		};
 	}
 
@@ -390,11 +414,19 @@
 			}, { passive: true });
 		});
 
+		document.addEventListener('click', function(e) {
+			var link = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+			if(link && isLogoutUrl(link.getAttribute('href')))
+				stopSessionMonitor();
+		}, true);
+
+		window.addEventListener('pagehide', stopSessionMonitor);
+
 		var pollMs = 30000;
 		if(cfg.idleTimeout > 0)
 			pollMs = Math.max(15000, Math.min(60000, cfg.idleTimeout * 60 * 1000 / 2));
 
-		setInterval(pollStatus, pollMs);
+		pollTimer = setInterval(pollStatus, pollMs);
 		pollStatus();
 
 		if(document.body && document.body.classList.contains('bm-session-locked'))

@@ -331,7 +331,7 @@ else if($_REQUEST['action'] == 'getFile'
 			// send file
 			header('Content-Type: ' . $fileInfo['contenttype']);
 			header('Content-Length: ' . $fileInfo['size']);
-			header('Content-Disposition: attachment; filename="' . addslashes($fileInfo['dateiname']) . '"');
+			SendContentDispositionHeader('attachment', $fileInfo['dateiname']);
 			Add2Stat('wd_down', ceil($fileInfo['size']/1024));
 			SendFileFP(BMBlobStorage::CreateProvider($fileInfo['blobstorage'], $userRow['id'])->loadBlob(BMBLOB_TYPE_WEBDISK, $fileInfo['id']),
 				$speedLimit);

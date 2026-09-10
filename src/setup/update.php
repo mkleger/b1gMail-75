@@ -31,7 +31,7 @@ $knownVersions = [
                         '7.4.0-Beta1', '7.4.0-Beta2', '7.4.0-Beta3', '7.4.0-Beta4', '7.4.0', 
                         '7.4.1-Beta1', '7.4.1-Beta2', '7.4.1-Beta3', '7.4.1-Beta4', '7.4.1-RC1', '7.4.1-RC2',
                         '7.4.2-RC1', '7.4.2-RC2',
-                        '7.5.0-RC1', '7.5.0-RC2'];
+                        '7.5.0-RC1', '7.5.0-RC2', '7.5.0-RC3'];
 
 
 // steps
@@ -235,6 +235,28 @@ elseif ($step == STEP_UPDATE) {
         $doneText .= '<br /><br />'.$lang_setup['dbnotconverted'];
     }
     echo SetupAlert('success', $doneText, '', array('id' => 'done', 'class' => 'd-none mt-3', 'dismissible' => false));
+
+    // CleverCron still active at start of update → show relocation notice when finished.
+    $showCleverCronNotice = false;
+    $res = mysqli_query($connection,
+        'SELECT installed, paused FROM '.$mysql['prefix'].'mods'
+        .' WHERE modname=\'TCCronPlugin\' OR modname=\'PluginTCCron\''
+        .' OR packageName LIKE \'%tccrn%\' OR packageName LIKE \'%clevercron%\''
+        .' LIMIT 1');
+    if ($res && ($row = mysqli_fetch_array($res, MYSQLI_ASSOC))) {
+        $showCleverCronNotice = ((int) $row['installed'] === 1 && (int) $row['paused'] === 0);
+    }
+    if ($res) {
+        mysqli_free_result($res);
+    }
+    if ($showCleverCronNotice && !empty($lang_setup['update_clevercron_notice'])) {
+        echo SetupAlert(
+            'info',
+            $lang_setup['update_clevercron_notice'],
+            '',
+            array('id' => 'update-clevercron-notice', 'class' => 'd-none mt-3', 'dismissible' => false)
+        );
+    }
 	?>
 	<?php
 }
@@ -300,6 +322,155 @@ elseif ($step == STEP_UPDATE_STEP) {
             mysqli_query($connection, 'UPDATE '.$mysql['prefix'].'staaten SET land = \'Eswatini\' WHERE id = 117'); // Rename Swasiland to Eswatini
             mysqli_query($connection, 'UPDATE '.$mysql['prefix'].'gruppen SET organizer = \'yes\''); // Allow organizer to all groups (default)
             mysqli_query($connection, 'UPDATE '.$mysql['prefix'].'aliase SET login = \'no\''); // No login with alias (default)
+        }
+
+        // 7.5: one-time data migrations (schema itself comes from database.struct.json / struct2)
+        if ($numVersion < 7503) {
+            $p = $mysql['prefix'];
+
+            // Pre-7.5 installs: keep Toolbox RPC working after column default "no".
+            if ($numVersion < 7501) {
+                mysqli_query($connection, 'UPDATE '.$p.'prefs SET clientapi_enable=\'yes\'');
+            }
+
+            // Fill cron_secret once if empty (column added by struct sync).
+            $res = mysqli_query($connection, 'SELECT cron_secret FROM '.$p.'prefs LIMIT 1');
+            if ($res) {
+                $row = mysqli_fetch_array($res, MYSQLI_ASSOC);
+                mysqli_free_result($res);
+                if (is_array($row) && trim((string) $row['cron_secret']) === '') {
+                    $secret = bin2hex(random_bytes(16));
+                    mysqli_query($connection, sprintf(
+                        'UPDATE '.$p.'prefs SET cron_secret=\'%s\'',
+                        SQLEscape($secret, $connection)
+                    ));
+                }
+            }
+
+            // MFA: backfill enabled_at from created.
+            $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$p.'mfa_accounts\'');
+            if ($res && mysqli_num_rows($res) > 0) {
+                mysqli_free_result($res);
+                mysqli_query($connection,
+                    'UPDATE '.$p.'mfa_accounts SET enabled_at=created'
+                    .' WHERE enabled=\'yes\' AND (enabled_at=0 OR enabled_at IS NULL)');
+            } elseif ($res) {
+                mysqli_free_result($res);
+            }
+
+            // known_logins: legacy unique key included ua_hash; new key is per account+IP.
+            $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$p.'known_logins\'');
+            if ($res && mysqli_num_rows($res) > 0) {
+                mysqli_free_result($res);
+                $idx = mysqli_query($connection, 'SHOW INDEX FROM '.$p.'known_logins WHERE Key_name=\'login_key\'');
+                $hasLegacy = $idx && mysqli_num_rows($idx) > 0;
+                if ($idx) {
+                    mysqli_free_result($idx);
+                }
+                if ($hasLegacy) {
+                    mysqli_query($connection,
+                        'DELETE t1 FROM '.$p.'known_logins t1'
+                        .' INNER JOIN '.$p.'known_logins t2'
+                        .' ON t1.account_type=t2.account_type AND t1.account_id=t2.account_id'
+                        .' AND t1.ip=t2.ip AND t1.id < t2.id');
+                    mysqli_query($connection, 'ALTER TABLE '.$p.'known_logins DROP INDEX `login_key`');
+                }
+                $idx = mysqli_query($connection, 'SHOW INDEX FROM '.$p.'known_logins WHERE Key_name=\'login_ip\'');
+                $hasNew = $idx && mysqli_num_rows($idx) > 0;
+                if ($idx) {
+                    mysqli_free_result($idx);
+                }
+                if (!$hasNew) {
+                    mysqli_query($connection,
+                        'ALTER TABLE '.$p.'known_logins'
+                        .' ADD UNIQUE KEY `login_ip` (`account_type`,`account_id`,`ip`)');
+                }
+            } elseif ($res) {
+                mysqli_free_result($res);
+            }
+
+            // CleverCron → core scheduled tasks: import jobs first, then deactivate plugin.
+            $cleverCronActive = false;
+            $res = mysqli_query($connection,
+                'SELECT installed, paused FROM '.$p.'mods'
+                .' WHERE modname=\'TCCronPlugin\' OR modname=\'PluginTCCron\''
+                .' OR packageName LIKE \'%tccrn%\' OR packageName LIKE \'%clevercron%\''
+                .' LIMIT 1');
+            if ($res && ($row = mysqli_fetch_array($res, MYSQLI_ASSOC))) {
+                $cleverCronActive = ((int) $row['installed'] === 1 && (int) $row['paused'] === 0);
+            }
+            if ($res) {
+                mysqli_free_result($res);
+            }
+
+            $oldCron = $p.'tccrn_plugin_cron';
+            $oldSettings = $p.'tccrn_plugin_settings';
+            $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$oldCron.'\'');
+            $hasOldCron = ($res && mysqli_num_rows($res) > 0);
+            if ($res) {
+                mysqli_free_result($res);
+            }
+
+            $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$p.'scheduled_tasks\'');
+            $hasSched = ($res && mysqli_num_rows($res) > 0);
+            if ($res) {
+                mysqli_free_result($res);
+            }
+
+            if ($hasSched) {
+                $res = mysqli_query($connection, 'SELECT COUNT(*) FROM '.$p.'scheduled_tasks_config');
+                if ($res) {
+                    list($cfgCount) = mysqli_fetch_array($res, MYSQLI_NUM);
+                    mysqli_free_result($res);
+                    if ((int) $cfgCount < 1) {
+                        mysqli_query($connection, 'INSERT INTO '.$p.'scheduled_tasks_config (`id`, `loglevel`) VALUES (1, 6)');
+                    }
+                }
+
+                if ($hasOldCron) {
+                    mysqli_query($connection,
+                        'INSERT INTO '.$p.'scheduled_tasks'
+                        .' (`active`, `task`, `status`, `lastcall`, `nextcall`, `crondata`, `taskdata`, `log`)'
+                        .' SELECT `active`, `task`, `status`, `lastcall`, `nextcall`, `crondata`, `taskdata`, `log`'
+                        .' FROM `'.$oldCron.'`');
+
+                    $res = mysqli_query($connection, 'SHOW TABLES LIKE \''.$oldSettings.'\'');
+                    if ($res && mysqli_num_rows($res) > 0) {
+                        mysqli_free_result($res);
+                        $res2 = mysqli_query($connection, 'SELECT `loglevel` FROM `'.$oldSettings.'` LIMIT 1');
+                        if ($res2 && ($cfg = mysqli_fetch_array($res2, MYSQLI_ASSOC))) {
+                            mysqli_query($connection, sprintf(
+                                'UPDATE '.$p.'scheduled_tasks_config SET `loglevel`=%d WHERE `id`=1',
+                                (int) $cfg['loglevel']
+                            ));
+                        }
+                        if ($res2) {
+                            mysqli_free_result($res2);
+                        }
+                        mysqli_query($connection, 'DROP TABLE IF EXISTS `'.$oldSettings.'`');
+                    } elseif ($res) {
+                        mysqli_free_result($res);
+                    }
+
+                    mysqli_query($connection, 'DROP TABLE IF EXISTS `'.$oldCron.'`');
+                }
+
+                mysqli_query($connection,
+                    'UPDATE '.$p.'scheduled_tasks SET `task`=REPLACE(`task`,\'tccrn.\',\'sched.\')'
+                    .' WHERE `task` LIKE \'tccrn.%\'');
+            }
+
+            mysqli_query($connection,
+                'UPDATE '.$p.'mods SET installed=0, paused=1'
+                .' WHERE modname=\'TCCronPlugin\' OR modname=\'PluginTCCron\''
+                .' OR packageName LIKE \'%tccrn%\' OR packageName LIKE \'%clevercron%\'');
+
+            if ($cleverCronActive) {
+                @file_put_contents(
+                    dirname(__DIR__).'/temp/update_clevercron_notice.flag',
+                    '1'
+                );
+            }
         }
 
         // add new root certificates
@@ -426,6 +597,8 @@ elseif ($step == STEP_UPDATE_STEP) {
         fclose($fp);
 
         SetupWriteLock('lock_update');
+
+        @unlink(dirname(__DIR__).'/temp/update_clevercron_notice.flag');
 
         echo 'OK:DONE';
     }

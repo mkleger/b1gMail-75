@@ -7,9 +7,10 @@
  *   /admin/{script}                            → users.php, groups.php, …
  *   /admin/{bereich}/{modul}                   → prefs.common.php (default action)
  *   /admin/{bereich}/{modul}/{action}          → prefs.common.php?action=…
- *   /admin/plugin/{pluginname}                 → plugin.page.php?plugin=… (name case-insensitive)
- *   /admin/plugin/{pluginname}/{do}            → plugin.page.php?plugin=…&do=…
- *   /admin/plugin/{pluginname}/{do}/{id}       → plugin.page.php?plugin=…&do=…&id=… (numeric id only)
+ *   /admin/plugin/{pluginname}                          → plugin.page.php?plugin=… (name case-insensitive)
+ *   /admin/plugin/{pluginname}/{do}                   → plugin.page.php?plugin=…&do=…
+ *   /admin/plugin/{pluginname}/{do}/{id}               → plugin.page.php?plugin=…&do=…&id=… (numeric id)
+ *   /admin/plugin/{pluginname}/{do}/{id}/{action}      → plugin.page.php?plugin=…&do=…&id=…&action=…
  *   All path segments are lowercase in URLs and on incoming requests.
  *   Query string: ?save=true&do1=mail (extra params, not path segments)
  *
@@ -27,21 +28,6 @@ if(!function_exists('PublicRoutingActive'))
 function RouteRootDir()
 {
 	return dirname(__DIR__) . '/';
-}
-
-/**
- * Ensure url_routing preference column exists.
- */
-function EnsureUrlRoutingPrefColumns()
-{
-	global $db;
-
-	$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', 'url_routing');
-	$exists = $res->RowCount() > 0;
-	$res->Free();
-
-	if(!$exists)
-		$db->Query("ALTER TABLE {pre}prefs ADD COLUMN `url_routing` enum('yes','no') NOT NULL DEFAULT 'no'");
 }
 
 /**
@@ -152,8 +138,14 @@ function AdminConvertLegacyUrl($url)
 	if(!preg_match('/\.php$/i', $script))
 		return null;
 
-	// Binary avatar endpoint: keep legacy avatar.php (stable on nested pretty-URL pages).
-	if(strcasecmp($script, 'avatar.php') === 0)
+	// Root-level / shared endpoints — not admin scripts (base href is /admin/).
+	if(strcasecmp($script, 'avatar.php') === 0
+		|| strcasecmp($script, 'clientlang.php') === 0)
+		return null;
+
+	$map = RouteGetAdminConventionMap();
+	$pathKey = strtolower(RouteAdminScriptToPathKey($script));
+	if(!isset($map[$pathKey]))
 		return null;
 
 	$params = array();
@@ -210,6 +202,8 @@ function RouteRestoreLegacyAction($action)
 		'initiatesession'           => 'initiateSession',
 		'switchlanguage'            => 'switchLanguage',
 		'generatevapid'             => 'generateVapid',
+		'faxplugin'                 => 'faxPlugin',
+		'fax'                       => 'faxPlugin',
 	);
 
 	$lower = strtolower($action);
@@ -367,22 +361,96 @@ function RouteResolvePluginInternalName($slug)
 }
 
 /**
- * Path prefix before /admin/ (e.g. /mail for installs in a subdirectory).
+ * URL path of the install root (e.g. /b1gmail), without trailing slash.
+ *
+ * Used to strip the subdirectory from REQUEST_URI when matching pretty routes.
+ * Prefers configured selfurl/ssl_url, then the front-controller SCRIPT_NAME,
+ * then the segment before /admin/ — only if that prefix is actually present
+ * on the current request (root installs stay empty).
+ *
+ * @return string Leading slash, no trailing slash; empty string at docroot.
+ */
+function RouteInstallUrlPrefix()
+{
+	static $cached = null;
+	if($cached !== null)
+		return $cached;
+
+	global $bm_prefs;
+	$prefsReady = isset($bm_prefs) && is_array($bm_prefs);
+
+	$uriPath = '';
+	if(!empty($_SERVER['REQUEST_URI']))
+	{
+		$parsed = parse_url((string)$_SERVER['REQUEST_URI'], PHP_URL_PATH);
+		if(is_string($parsed))
+			$uriPath = $parsed;
+	}
+
+	$candidates = array();
+
+	if($prefsReady)
+	{
+		foreach(array('selfurl', 'ssl_url') as $key)
+		{
+			if(empty($bm_prefs[$key]))
+				continue;
+			$path = parse_url((string)$bm_prefs[$key], PHP_URL_PATH);
+			if(is_string($path) && $path !== '' && $path !== '/')
+				$candidates[] = rtrim($path, '/');
+		}
+	}
+
+	$script = isset($_SERVER['SCRIPT_NAME']) ? str_replace('\\', '/', (string)$_SERVER['SCRIPT_NAME']) : '';
+	if($script !== '')
+	{
+		if(substr($script, -strlen('/admin/app.php')) === '/admin/app.php')
+			$candidates[] = substr($script, 0, -strlen('/admin/app.php'));
+		else if(substr($script, -strlen('/app.php')) === '/app.php')
+			$candidates[] = substr($script, 0, -strlen('/app.php'));
+		else
+		{
+			$dir = str_replace('\\', '/', dirname($script));
+			if(strcasecmp(basename($dir), 'admin') === 0)
+				$dir = dirname($dir);
+			if($dir !== '/' && $dir !== '.' && $dir !== '')
+				$candidates[] = rtrim($dir, '/');
+		}
+	}
+
+	if($uriPath !== '')
+	{
+		$pos = stripos($uriPath, '/admin');
+		if($pos > 0)
+			$candidates[] = substr($uriPath, 0, $pos);
+	}
+
+	$found = '';
+	foreach($candidates as $cand)
+	{
+		if($cand === '' || $cand === '/')
+			continue;
+		if($uriPath === '' || $uriPath === $cand || strpos($uriPath, $cand . '/') === 0)
+		{
+			$found = $cand;
+			break;
+		}
+	}
+
+	if($found !== '' || $prefsReady)
+		$cached = $found;
+
+	return $found;
+}
+
+/**
+ * Path prefix before /admin/ (e.g. /b1gmail for installs in a subdirectory).
  *
  * @return string Leading slash, no trailing slash; empty string at docroot.
  */
 function RouteAdminUrlPrefix()
 {
-	$uri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
-	$path = parse_url($uri, PHP_URL_PATH);
-	if(!is_string($path) || $path === '')
-		$path = '/';
-
-	$pos = stripos($path, '/admin');
-	if($pos === false)
-		return '';
-
-	return $pos > 0 ? substr($path, 0, $pos) : '';
+	return RouteInstallUrlPrefix();
 }
 
 /**
@@ -508,8 +576,12 @@ function RouteMatchAdminPath($adminPath)
 			foreach($rest as $i => $part)
 				$rest[$i] = RouteNormalizePathSegment($part);
 
-			if(count($rest) === 1 && preg_match('/^\d+$/', $rest[0]))
+			if(isset($rest[0]) && preg_match('/^\d+$/', $rest[0]))
+			{
 				$params['id'] = $rest[0];
+				if(count($rest) > 1)
+					$params['action'] = implode('/', array_slice($rest, 1));
+			}
 			else
 				$params['action'] = implode('/', $rest);
 		}
@@ -793,9 +865,11 @@ function AssignTemplateAdminRouteVars($tpl)
 {
 	$routing = AdminRoutingActive();
 	$fqdn = AdminUseFqdnUrls();
+	$selfUrl = AdminFqdnSelfUrl();
 
 	$tpl->assign('urlRoutingEnabled', $routing);
 	$tpl->assign('adminAbsoluteUrls', $fqdn);
+	$tpl->assign('adminClientLangUrl', rtrim($selfUrl, '/') . '/clientlang.php');
 
 	if(!$fqdn)
 	{
@@ -805,12 +879,10 @@ function AssignTemplateAdminRouteVars($tpl)
 	}
 
 	$adminBase = AdminFqdnBaseUrl();
-	$selfUrl = AdminFqdnSelfUrl();
 
 	$tpl->assign('adminBaseHref', $adminBase);
 	$tpl->assign('tpldir', $adminBase . 'templates/');
 	$tpl->assign('adminApiBase', $adminBase);
-	$tpl->assign('adminClientLangUrl', SessionUrl($selfUrl . 'clientlang.php'));
 	$tpl->assign('adminManifestUrl', SessionUrl($adminBase . 'manifest.php'));
 	$tpl->assign('adminPushSyncUrl', SessionUrl($adminBase . 'push-api.php?action=sync'));
 }

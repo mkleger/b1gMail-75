@@ -3,88 +3,6 @@
  * b1gMail MFA (TOTP, E-Mail-OTP, Backup-Codes) — no external services
  */
 
-/**
- * Create DB tables / prefs columns for MFA (idempotent).
- */
-function EnsureMfaSchema()
-{
-	global $db;
-
-	$db->Query('CREATE TABLE IF NOT EXISTS {pre}mfa_accounts (
-		`id` int(11) NOT NULL AUTO_INCREMENT,
-		`account_type` enum(\'user\',\'admin\') NOT NULL,
-		`account_id` int(11) NOT NULL,
-		`method` enum(\'totp\',\'email\') NOT NULL DEFAULT \'totp\',
-		`totp_secret` varchar(255) NOT NULL DEFAULT \'\',
-		`email_enabled` enum(\'yes\',\'no\') NOT NULL DEFAULT \'no\',
-		`totp_enabled` enum(\'yes\',\'no\') NOT NULL DEFAULT \'no\',
-		`enabled` enum(\'yes\',\'no\') NOT NULL DEFAULT \'no\',
-		`setup_required` enum(\'yes\',\'no\') NOT NULL DEFAULT \'no\',
-		`recovery_mode` enum(\'no\',\'altmail\') NOT NULL DEFAULT \'no\',
-		`created` int(11) NOT NULL DEFAULT 0,
-		PRIMARY KEY (`id`),
-		UNIQUE KEY `account` (`account_type`,`account_id`)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
-
-	$db->Query('CREATE TABLE IF NOT EXISTS {pre}mfa_backup_codes (
-		`id` int(11) NOT NULL AUTO_INCREMENT,
-		`mfa_account_id` int(11) NOT NULL,
-		`code_hash` varchar(255) NOT NULL,
-		`used_at` int(11) NOT NULL DEFAULT 0,
-		PRIMARY KEY (`id`),
-		KEY `mfa_account_id` (`mfa_account_id`)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
-
-	$db->Query('CREATE TABLE IF NOT EXISTS {pre}mfa_email_codes (
-		`id` int(11) NOT NULL AUTO_INCREMENT,
-		`mfa_account_id` int(11) NOT NULL,
-		`code_hash` varchar(255) NOT NULL,
-		`expires` int(11) NOT NULL DEFAULT 0,
-		`created` int(11) NOT NULL DEFAULT 0,
-		PRIMARY KEY (`id`),
-		KEY `mfa_account_id` (`mfa_account_id`)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4');
-
-	$prefColumns = array(
-		'mfa_admin_enable'       => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'mfa_admin_user_setup'   => "enum('yes','no') NOT NULL DEFAULT 'yes'",
-		'mfa_admin_default'      => "enum('email','totp') NOT NULL DEFAULT 'totp'",
-		'mfa_admin_required'     => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'login_notify_admin'       => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'mfa_li_enable'          => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'mfa_li_user_setup'      => "enum('yes','no') NOT NULL DEFAULT 'yes'",
-		'mfa_li_default'         => "enum('email','totp') NOT NULL DEFAULT 'totp'",
-		'login_notify_li'        => "enum('yes','no') NOT NULL DEFAULT 'no'",
-	);
-
-	$mfaColumns = array(
-		'setup_required' => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'recovery_mode'  => "enum('no','altmail') NOT NULL DEFAULT 'no'",
-		'enabled_at'     => "int(11) NOT NULL DEFAULT 0",
-	);
-	foreach($mfaColumns as $column => $definition)
-	{
-		$res = $db->Query('SHOW COLUMNS FROM {pre}mfa_accounts LIKE ?', $column);
-		$exists = $res->RowCount() > 0;
-		$res->Free();
-		if(!$exists)
-			$db->Query('ALTER TABLE {pre}mfa_accounts ADD COLUMN `' . $column . '` ' . $definition);
-	}
-
-	$db->Query('UPDATE {pre}mfa_accounts SET enabled_at=created WHERE enabled=? AND (enabled_at=0 OR enabled_at IS NULL)',
-		'yes');
-
-	foreach($prefColumns as $column => $definition)
-	{
-		$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', $column);
-		$exists = $res->RowCount() > 0;
-		$res->Free();
-
-		if(!$exists)
-			$db->Query('ALTER TABLE {pre}prefs ADD COLUMN `' . $column . '` ' . $definition);
-	}
-}
-
 function MfaApplyPrefDefaults()
 {
 	global $bm_prefs;
@@ -939,6 +857,7 @@ class BMMfa
 				time(),
 				(int)$mfaAccountID);
 		}
+		self::InvalidateRememberMeForMfaAccount($mfaAccountID);
 	}
 
 	/**
@@ -1109,6 +1028,49 @@ class BMMfa
 			BMUser::InvalidateRememberMeForUser($accountID);
 
 		return true;
+	}
+
+	/**
+	 * Remember-me cookie may skip login MFA when it was issued after MFA
+	 * was enabled on this account (trusted device).
+	 *
+	 * @param int $userID
+	 * @param int $tokenExpires
+	 * @return bool
+	 */
+	public static function RememberMeMaySkipVerify($userID, $tokenExpires)
+	{
+		$account = self::GetAccount('user', (int)$userID);
+		if(!self::RequiresMfaVerifyAtLogin($account))
+			return true;
+
+		$enabledAt = self::GetEnabledAtTimestamp($account);
+		if($enabledAt <= 0)
+			return true;
+
+		$issuedAt = (int)$tokenExpires - TIME_ONE_YEAR;
+		return $issuedAt + 300 >= $enabledAt;
+	}
+
+	/**
+	 * @param int $mfaAccountID
+	 */
+	public static function InvalidateRememberMeForMfaAccount($mfaAccountID)
+	{
+		global $db;
+
+		$res = $db->Query('SELECT account_type,account_id FROM {pre}mfa_accounts WHERE id=?',
+			(int)$mfaAccountID);
+		if($res->RowCount() != 1)
+		{
+			$res->Free();
+			return;
+		}
+		$row = $res->FetchArray(MYSQLI_ASSOC);
+		$res->Free();
+
+		if($row['account_type'] === 'user')
+			BMUser::InvalidateRememberMeForUser((int)$row['account_id']);
 	}
 
 	/**
@@ -1437,6 +1399,9 @@ class BMMfa
 			'group_id'       => $groupID,
 			'password_plain' => $passwordPlain,
 			'recovery'       => $account['recovery_mode'] === 'altmail',
+			'savelogin'      => isset($_POST['savelogin']),
+			'ssl'            => isset($_POST['ssl']) || (!empty($_COOKIE['bm_savedSSL']) && $_COOKIE['bm_savedSSL'] === '1'),
+			'timezone'       => ResolveClientTimezoneOffset(isset($row['last_timezone']) ? $row['last_timezone'] : null),
 		);
 
 		self::BeginPending('user', $userID, $meta);
@@ -1503,10 +1468,21 @@ class BMMfa
 		$_SESSION['bm_userLoggedIn']   = true;
 		$_SESSION['bm_userID']         = $userID;
 		$_SESSION['bm_sessionToken']   = SessionToken();
+		if(isset($pending['meta']['timezone']))
+			$_SESSION['bm_timezone'] = (int)$pending['meta']['timezone'];
+		else
+			$_SESSION['bm_timezone'] = ResolveClientTimezoneOffset(isset($row['last_timezone']) ? $row['last_timezone'] : null);
 		if($passwordPlain !== '')
 			$_SESSION['bm_xorCryptKey'] = BMUser::GenerateXORCryptKey($userID, $passwordPlain);
 		BMUser::SyncSessionEpochToSession($userID);
 		SessionInitLoginTimestamps(false);
+
+		if(isset($_SESSION['bm_timezone']))
+		{
+			$db->Query('UPDATE {pre}users SET last_timezone=? WHERE id=?',
+				(int)$_SESSION['bm_timezone'],
+				$userID);
+		}
 
 		$account = self::GetAccount('user', $userID);
 		if(is_array($account))
@@ -1527,6 +1503,22 @@ class BMMfa
 
 		self::ClearPending();
 		unset($pending['meta']['password_plain']);
+
+		if(!empty($pending['meta']['savelogin']))
+		{
+			if(isset($_COOKIE['bm_savedToken']))
+				BMUser::DeleteSavedLogin($_COOKIE['bm_savedToken']);
+
+			$cookieToken = BMUser::SaveLogin($userID);
+			BMSecureSetCookie('bm_savedUser', $row['email'], time() + TIME_ONE_YEAR);
+			if(isset($_COOKIE['savedPassword']))
+				BMSecureSetCookie('bm_savedPassword', '', time() - TIME_ONE_HOUR);
+			if($cookieToken !== false)
+				BMSecureSetCookie('bm_savedToken', $cookieToken, time() + TIME_ONE_YEAR);
+			BMSecureSetCookie('bm_savedSSL',
+				!empty($pending['meta']['ssl']) ? '1' : '0',
+				time() + TIME_ONE_YEAR);
+		}
 
 		$groupID = (int)$row['gruppe'];
 		self::ClearStaleSetupRequired('user', $userID);
@@ -1567,7 +1559,7 @@ class BMMfa
 		$meta = array_merge(array(
 			'username' => $adminRow['username'],
 			'password' => $adminRow['password'],
-			'timezone' => date('Z'),
+			'timezone' => ResolveClientTimezoneOffset(null),
 			'jump'     => '',
 		), $meta);
 
@@ -1736,6 +1728,7 @@ class BMMfa
 			'yes',
 			time(),
 			(int)$mfaAccountID);
+		self::InvalidateRememberMeForMfaAccount($mfaAccountID);
 		self::SetSetupRequiredSession(false);
 	}
 
@@ -1829,17 +1822,7 @@ class BMMfa
 	 */
 	public static function AdminTableHasEmailColumn()
 	{
-		global $db;
-
-		static $has = null;
-		if($has !== null)
-			return $has;
-
-		$res = $db->Query('SHOW COLUMNS FROM {pre}admins LIKE ?', 'email');
-		$has = $res->RowCount() > 0;
-		$res->Free();
-
-		return $has;
+		return true;
 	}
 
 	/**
@@ -1853,9 +1836,6 @@ class BMMfa
 		$adminID = (int)$adminID;
 		if($adminID <= 0 || !self::AdminTableHasEmailColumn())
 			return false;
-
-		if(function_exists('EnsureAdminEmailColumn'))
-			EnsureAdminEmailColumn();
 
 		$res = $db->Query('SELECT `email` FROM {pre}admins WHERE `adminid`=?', $adminID);
 		if($res->RowCount() != 1)

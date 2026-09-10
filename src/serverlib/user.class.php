@@ -308,6 +308,30 @@ class BMUser
 	}
 
 	/**
+	 * Mark mail-related notifications as read when a mail is read.
+	 *
+	 * Clears per-mail filter notifications (::notifyEMail) for the given mail ID
+	 * and the aggregated new-mail notification (::newEMail).
+	 *
+	 * @param int $mailID Mail ID that was marked as read
+	 */
+	public function MarkMailRelatedNotificationsRead($mailID)
+	{
+		global $db;
+
+		$mailID = (int)$mailID;
+
+		$db->Query('UPDATE {pre}notifications SET `read`=1 WHERE `userid`=? AND `read`=0 AND `class`=? AND `link` LIKE ?',
+			$this->_id,
+			'::notifyEMail',
+			'email.read.php?id=' . $mailID . '%');
+
+		$db->Query('UPDATE {pre}notifications SET `read`=1 WHERE `userid`=? AND `read`=0 AND `class`=?',
+			$this->_id,
+			'::newEMail');
+	}
+
+	/**
 	 * check if user may see SMS stuff
 	 *
 	 * @return bool
@@ -1456,7 +1480,7 @@ class BMUser
 						$adminAuthOK ? $row['lastlogin'] : time(),
 						$currentCharset,
 						$userLanguage ? $userLanguage : $currentLanguage,
-						isset($_SESSION['bm_timezone']) ? (int)$_SESSION['bm_timezone'] : (isset($_REQUEST['timezone']) ? $_REQUEST['timezone'] : $row['last_timezone']),
+						ResolveClientTimezoneOffset($row['last_timezone']),
 						$userID);
 
 					// create session
@@ -1487,6 +1511,7 @@ class BMUser
 							$_SESSION['bm_userID']			= $userID;
 							$_SESSION['bm_sessionToken']	= SessionToken();
 							$_SESSION['bm_xorCryptKey']		= BMUser::GenerateXORCryptKey($userID, $passwordPlain);
+							$_SESSION['bm_timezone']		= ResolveClientTimezoneOffset($row['last_timezone']);
 							BMUser::SyncSessionEpochToSession($userID);
 							SessionInitLoginTimestamps(false);
 
@@ -1641,9 +1666,11 @@ class BMUser
 	 * @param int  $userID
 	 * @param bool $createSession
 	 * @param bool $successLog
+	 * @param bool $adminImpersonate
+	 * @param bool $rememberMeTrusted Skip login MFA (trusted device cookie)
 	 * @return array
 	 */
-	public static function LoginByUserID($userID, $createSession = true, $successLog = true, $adminImpersonate = false)
+	public static function LoginByUserID($userID, $createSession = true, $successLog = true, $adminImpersonate = false, $rememberMeTrusted = false)
 	{
 		global $db, $currentCharset, $currentLanguage, $bm_prefs;
 
@@ -1678,19 +1705,21 @@ class BMUser
 			$adminImpersonate ? $row['lastlogin'] : time(),
 			$currentCharset,
 			$userLanguage ? $userLanguage : $currentLanguage,
-			isset($_SESSION['bm_timezone']) ? (int)$_SESSION['bm_timezone'] : (isset($_REQUEST['timezone']) ? $_REQUEST['timezone'] : $row['last_timezone']),
+			ResolveClientTimezoneOffset($row['last_timezone']),
 			$userID);
 
 		$mfaDeferred = false;
 		if($createSession)
 		{
-			if(!$adminImpersonate && BMMfa::DeferUserLoginForMfa($userID, $row, ''))
+			if(!$adminImpersonate && !$rememberMeTrusted && BMMfa::DeferUserLoginForMfa($userID, $row, ''))
 				$mfaDeferred = true;
 			else
 			{
 				BMMfa::ClearPending();
 				@session_start();
-				SessionRegenerateOnLogin();
+				/* Preserve CSRF: admin UI tab stays open and would otherwise
+				   fail the next POST with "Sicherheitsprüfung fehlgeschlagen". */
+				SessionRegenerateOnLogin($adminImpersonate ? true : false);
 				$sessionID = session_id();
 
 				if($bm_prefs['cookie_lock'] == 'yes')
@@ -1704,7 +1733,9 @@ class BMUser
 
 				$_SESSION['bm_userLoggedIn']	= true;
 				$_SESSION['bm_userID']			= $userID;
+				$_SESSION['bm_adminImpersonate']	= $adminImpersonate ? true : false;
 				$_SESSION['bm_sessionToken']	= SessionToken();
+				$_SESSION['bm_timezone']		= ResolveClientTimezoneOffset($row['last_timezone']);
 				BMUser::SyncSessionEpochToSession($userID);
 				SessionInitLoginTimestamps(false);
 
@@ -1754,15 +1785,15 @@ class BMUser
 			}
 		}
 
-		$_SESSION['bm_userLoggedIn']	= false;
-		$_SESSION['bm_userID']			= -1;
-
-		if(!isset($_SESSION['bm_adminLoggedIn']))
+		$preserveAdmin = !empty($_SESSION['bm_adminLoggedIn']);
+		if(function_exists('SessionEndBrowserSession'))
+			SessionEndBrowserSession($preserveAdmin);
+		else
 		{
-			$cookieName = 'sessionSecret_'.substr(session_id(), 0, 16);
-			if(isset($_COOKIE[$cookieName]))
-				BMSecureSetCookie($cookieName, '', time() - TIME_ONE_HOUR);
-			session_destroy();
+			$_SESSION['bm_userLoggedIn'] = false;
+			$_SESSION['bm_userID'] = -1;
+			if(!$preserveAdmin)
+				@session_destroy();
 		}
 	}
 
@@ -4130,7 +4161,10 @@ class BMUser
 		if($userID <= 0 || !password_verify($secret, $hash))
 			return(false);
 
-		return(array('userID' => $userID));
+		return(array(
+			'userID'  => $userID,
+			'expires' => (int)$row['expires'],
+		));
 	}
 
 	/**

@@ -24,7 +24,7 @@ var _currentPreviewMailID = 0;
 
 function loadDraft(id)
 {
-	document.location.href = 'email.compose.php?redirect='+encodeURIComponent(id)+'&sid='+currentSID;
+	document.location.href = bmAppendSession('email.compose.php?redirect='+encodeURIComponent(id));
 }
 
 function hideDraftNote(setNoNotify, draftID)
@@ -126,7 +126,7 @@ function readMailShowBottomLayer(name)
 
 function updatePreviewPosition(s)
 {
-	document.location.href = 'email.php?folder='+currentFolderID+'&do=setPreviewPosition&pos='+escape(s.value)+'&sid='+currentSID;
+	document.location.href = bmAppendSession('email.php?folder='+currentFolderID+'&do=setPreviewPosition&pos='+escape(s.value));
 }
 
 function _switchFolder(e, retainPreviewMail)
@@ -190,7 +190,7 @@ function switchFolder(folderID, retainPreviewMail)
 	}
 	else
 	{
-		document.location.href = 'email.php?folder='+folderID+'&sid='+currentSID;
+		document.location.href = bmAppendSession('email.php?folder='+folderID);
 	}
 }
 
@@ -249,9 +249,9 @@ function initMailSel()
 	sel.cbItemDoubleClick = function(element)
 	{
 		if(currentFolderID == -3)
-			document.location.href = 'email.compose.php?redirect=' + this.getItemID(element) + '&sid=' + currentSID;
+			document.location.href = bmAppendSession('email.compose.php?redirect=' + this.getItemID(element));
 		else
-			document.location.href = 'email.read.php?id=' + this.getItemID(element) + '&sid=' + currentSID;
+			document.location.href = bmAppendSession('email.read.php?id=' + this.getItemID(element));
 	}
 	sel.multiContextMenu = true;
 	sel.init();
@@ -367,9 +367,22 @@ function registerFolderHotkeyHandler()
 			case 46: // del
 				if(confirm(lang['realdel']))
 				{
-					EBID('massAction').value = 'delete';
 					transferSelectedMailIDs();
-					document.forms['f1'].submit();
+					var idsField = EBID('selectedMailIDs');
+					var ids = [];
+					if(idsField && idsField.value)
+					{
+						var parts = idsField.value.split(';');
+						for(var i = 0; i < parts.length; i++)
+						{
+							if(parts[i] !== '')
+								ids.push(parseInt(parts[i], 10));
+						}
+					}
+					if(ids.length > 0)
+						deleteMail(ids);
+					else if(typeof currentID !== 'undefined' && currentID)
+						deleteMail(currentID);
 				}
 				return(false);
 			}
@@ -458,7 +471,7 @@ function saveAttachmentToWebdisk(id, attachment, fileName, sid)
 
 function updateGroupMode(c, fs, sid)
 {
-	document.location.href = 'email.php?sid=' + sid + '&' + fs + '&do=changeGroupMode&groupmode=' + c.value;
+	document.location.href = bmAppendSession('email.php?' + fs + '&do=changeGroupMode&groupmode=' + c.value);
 }
 
 function initEMailTextArea(code)
@@ -928,6 +941,20 @@ function folderFlagMail(id, flag, value)
 					reloadFolderList(results.slice(id.length).join(','));
 				else
 					reloadFolderList();
+
+				if(typeof(setNotificationCount) == 'function')
+				{
+					var notifyUrl = 'start.php?action=getNotificationCount';
+					if(typeof bmSessionAppendUrl === 'function')
+						notifyUrl = bmSessionAppendUrl(notifyUrl);
+					else
+						notifyUrl += '&sid=' + currentSID;
+					MakeXMLRequest(notifyUrl, function(e)
+					{
+						if(e.readyState == 4)
+							setNotificationCount(parseInt(e.responseText));
+					});
+				}
 			}
 		}
 	});
@@ -1024,7 +1051,7 @@ function mailReply(mailID, all)
 	}
 	else
 	{
-		document.location.href = 'email.compose.php?sid='+currentSID+'&reply='+mailID+(all?'&all=true':'');
+		document.location.href = bmAppendSession('email.compose.php?reply='+mailID+(all?'&all=true':''));
 	}
 }
 
@@ -1354,4 +1381,23 @@ function submitComposeForm()
 	if(EBID('composeLoading'))
 		EBID('composeLoading').style.display = '';
 	document.forms.f1.submit();
+}
+
+function bmEnableExternalContent(mailID, textMode)
+{
+	mailID = parseInt(mailID, 10);
+	if(!mailID)
+		return false;
+
+	textMode = textMode || 'html';
+
+	var note = EBID('noExternalDiv');
+	if(note)
+		note.style.display = 'none';
+
+	if(typeof bmAppendSession === 'function')
+		document.location.href = bmAppendSession('email.read.php?id=' + mailID + '&enableExternal=true');
+	else
+		document.location.href = 'email.read.php?id=' + mailID + '&enableExternal=true&sid=' + (typeof currentSID !== 'undefined' ? currentSID : '');
+	return false;
 }

@@ -496,7 +496,7 @@ else if($_REQUEST['action'] == 'downloadFile'
 
 			header('Pragma: public');
 			header('Content-Type: ' . $effectiveContentType);
-			header('Content-Disposition: ' . ($isInlineView ? 'inline' : 'attachment') . '; filename="' . addslashes($fileInfo['dateiname']) . '"');
+			SendContentDispositionHeader($isInlineView ? 'inline' : 'attachment', $fileInfo['dateiname']);
 
 			$fp = BMBlobStorage::CreateProvider($fileInfo['blobstorage'], $userRow['id'])->loadBlob(BMBLOB_TYPE_WEBDISK, $fileInfo['id']);
 			if($isPdfView || $isMediaRangeView)

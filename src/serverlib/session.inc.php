@@ -4,33 +4,6 @@
  */
 
 /**
- * Ensure session-related preference columns exist.
- */
-function EnsureSessionPrefColumns()
-{
-	global $db;
-
-	$columns = array(
-		'session_lifetime'       => 'int(11) NOT NULL DEFAULT 480',
-		'session_idle_timeout'   => 'int(11) NOT NULL DEFAULT 30',
-		'session_warn_before'    => 'int(11) NOT NULL DEFAULT 2',
-		'session_cookie_mode'    => "enum('yes','no') NOT NULL DEFAULT 'yes'",
-		'session_url_compat'     => "enum('yes','no') NOT NULL DEFAULT 'no'",
-		'admin_whitelist_ips'    => 'text NOT NULL',
-	);
-
-	foreach($columns as $column => $definition)
-	{
-		$res = $db->Query('SHOW COLUMNS FROM {pre}prefs LIKE ?', $column);
-		$exists = $res->RowCount() > 0;
-		$res->Free();
-
-		if(!$exists)
-			$db->Query('ALTER TABLE {pre}prefs ADD COLUMN `' . $column . '` ' . $definition);
-	}
-}
-
-/**
  * Apply defaults for session prefs loaded from DB.
  */
 function SessionApplyPrefDefaults()
@@ -327,6 +300,14 @@ function SessionUrl($url)
 		$converted = PublicConvertLegacyUrl($url);
 		if($converted !== null)
 			$url = $converted;
+		else if(function_exists('PublicRoutingActive') && PublicRoutingActive()
+			&& function_exists('PublicEnsureAbsoluteUrl')
+			&& preg_match('#^[A-Za-z0-9_.-]+\.php([?#]|$)#', $url))
+		{
+			// Nested pretty URLs (e.g. /email/read/123) break relative *.php links;
+			// keep legacy scripts root-absolute when they have no pretty mapping.
+			$url = PublicEnsureAbsoluteUrl($url);
+		}
 	}
 
 	if(strpos($url, '?') !== false && substr($url, -1) !== '?' && substr($url, -1) !== '&')
@@ -581,6 +562,117 @@ function SessionLogoutRedirectUrl()
 }
 
 /**
+ * Clear remember-me cookies for this browser and drop the stored token.
+ */
+function SessionClearRememberMeBrowser()
+{
+	if(!empty($_COOKIE['bm_savedToken']))
+	{
+		if(class_exists('BMUser', false))
+			BMUser::DeleteSavedLogin((string)$_COOKIE['bm_savedToken']);
+		BMSecureSetCookie('bm_savedToken', '', time() - TIME_ONE_HOUR);
+	}
+
+	foreach(array('bm_savedUser', 'bm_savedPassword', 'bm_savedSSL', 'savedPassword') as $name)
+	{
+		if(isset($_COOKIE[$name]))
+			BMSecureSetCookie($name, '', time() - TIME_ONE_HOUR);
+	}
+}
+
+/**
+ * Expire the PHP session cookie so concurrent keepAlive cannot resurrect auth.
+ */
+function SessionExpireSessionCookie()
+{
+	$name = session_name();
+	if($name === '')
+		$name = 'sid';
+
+	$secure = SessionRequestIsHttps();
+	$params = (session_status() === PHP_SESSION_ACTIVE || function_exists('session_get_cookie_params'))
+		? @session_get_cookie_params()
+		: array();
+	if(!is_array($params))
+		$params = array();
+
+	$path = isset($params['path']) && $params['path'] !== '' ? $params['path'] : '/';
+	$domain = isset($params['domain']) ? (string)$params['domain'] : '';
+	$secureCookie = !empty($params['secure']) || $secure;
+	$sameSite = (!empty($params['samesite'])) ? (string)$params['samesite'] : 'Lax';
+
+	if(PHP_VERSION_ID >= 70300)
+	{
+		setcookie($name, '', array(
+			'expires'  => time() - 42000,
+			'path'     => $path,
+			'domain'   => $domain,
+			'secure'   => $secureCookie,
+			'httponly' => true,
+			'samesite' => $sameSite,
+		));
+	}
+	else
+		setcookie($name, '', time() - 42000, '/; samesite=Lax', $domain, $secureCookie, true);
+
+	unset($_COOKIE[$name]);
+}
+
+/**
+ * End the current browser session (and related lock cookies).
+ *
+ * Clearing the session cookie is required: otherwise an in-flight sessionKeepAlive
+ * can rewrite the destroyed session file while the browser still presents the old sid.
+ *
+ * @param bool $preserveAdminSession When an ACP session shares the PHP session, only drop user keys.
+ */
+function SessionEndBrowserSession($preserveAdminSession = false)
+{
+	if(session_status() !== PHP_SESSION_ACTIVE)
+		SessionStart();
+
+	$sid = session_id();
+	if($sid !== '')
+	{
+		$userSecret = 'sessionSecret_'.substr($sid, 0, 16);
+		if(isset($_COOKIE[$userSecret]))
+			BMSecureSetCookie($userSecret, '', time() - TIME_ONE_HOUR);
+
+		if(!$preserveAdminSession)
+		{
+			$adminSecret = 'bm_admin_sessionSecret_'.substr($sid, 0, 16);
+			if(isset($_COOKIE[$adminSecret]))
+				BMSecureSetCookie($adminSecret, '', time() - TIME_ONE_HOUR);
+		}
+	}
+
+	if(function_exists('CsrfSyncCookieClear'))
+		CsrfSyncCookieClear();
+
+	if($preserveAdminSession)
+	{
+		unset(
+			$_SESSION['bm_userLoggedIn'],
+			$_SESSION['bm_userID'],
+			$_SESSION['bm_sessionToken'],
+			$_SESSION['bm_xorCryptKey'],
+			$_SESSION['bm_sessionEpoch'],
+			$_SESSION['bm_loginTime'],
+			$_SESSION['bm_lastActivity'],
+			$_SESSION['bm_uiLocked'],
+			$_SESSION['bm_sessionCookieSecret'],
+			$_SESSION['bm_mfaSetupRequired'],
+			$_SESSION['bm_sessionLanguage']
+		);
+		return;
+	}
+
+	$_SESSION = array();
+	SessionExpireSessionCookie();
+	@session_destroy();
+}
+
+/**
  * Log out current webmail user and redirect to logout URL / NLI home.
  * Works even when the session is expired or no longer passes RequestPrivileges.
  */
@@ -588,18 +680,54 @@ function SessionHandleUserLogout()
 {
 	SessionStart();
 
-	if(isset($_SESSION['bm_userID']) && (int)$_SESSION['bm_userID'] > 0)
+	$userID = isset($_SESSION['bm_userID']) ? (int)$_SESSION['bm_userID'] : 0;
+	$preserveAdmin = !empty($_SESSION['bm_adminLoggedIn']);
+
+	if($userID > 0)
 	{
-		$user = _new('BMUser', array((int)$_SESSION['bm_userID']));
+		$user = _new('BMUser', array($userID));
 		$user->Logout();
 	}
-	else if(empty($_SESSION['bm_adminLoggedIn']))
+	else
+		SessionEndBrowserSession($preserveAdmin);
+
+	SessionClearRememberMeBrowser();
+
+	if(!headers_sent())
 	{
-		unset($_SESSION['bm_userLoggedIn'], $_SESSION['bm_userID']);
-		@session_destroy();
+		header('Cache-Control: no-store, no-cache, must-revalidate');
+		header('Pragma: no-cache');
 	}
 
 	SessionRedirect(SessionLogoutRedirectUrl());
+}
+
+/**
+ * Log out current admin and redirect to ACP login.
+ * Works even when the session is expired or no longer passes RequestPrivileges.
+ */
+function SessionHandleAdminLogout()
+{
+	SessionStart();
+
+	$adminId = isset($_SESSION['bm_adminID']) ? (int)$_SESSION['bm_adminID'] : 0;
+	if($adminId > 0)
+	{
+		if(!class_exists('BMPush', false))
+			@include_once B1GMAIL_DIR.'serverlib/push.class.php';
+		if(class_exists('BMPush', false) && BMPush::isEnabled())
+			BMPush::unsubscribeAll(BMPush::AREA_ADMIN, $adminId);
+	}
+
+	SessionEndBrowserSession(false);
+
+	if(!headers_sent())
+	{
+		header('Cache-Control: no-store, no-cache, must-revalidate');
+		header('Pragma: no-cache');
+	}
+
+	SessionRedirect('index.php');
 }
 
 /**
@@ -641,14 +769,24 @@ function SessionInitLoginTimestamps($admin = false)
 
 /**
  * Regenerate session id after login.
+ *
+ * @param bool $preserveCsrf Keep existing CSRF token (e.g. ACP impersonation
+ *                           must not invalidate the still-open admin tab).
  */
-function SessionRegenerateOnLogin()
+function SessionRegenerateOnLogin($preserveCsrf = false)
 {
 	if(session_status() !== PHP_SESSION_ACTIVE)
 		@session_start();
 
 	@session_regenerate_id(true);
-	CsrfRegenerateToken();
+	if($preserveCsrf)
+	{
+		if(empty($_SESSION['bm_csrfToken']))
+			$_SESSION['bm_csrfToken'] = bin2hex(random_bytes(32));
+		CsrfSyncCookieSet($_SESSION['bm_csrfToken']);
+	}
+	else
+		CsrfRegenerateToken();
 	SessionRebindAdminCookieLock();
 }
 
@@ -700,6 +838,17 @@ function SessionStart()
 		@session_start();
 	else
 		SessionEnsureActiveWithCookie();
+}
+
+/**
+ * Release the exclusive PHP session lock so other tabs (e.g. ACP) can proceed
+ * during long-running work. $_SESSION stays readable in this request; later
+ * writes are not persisted unless SessionStart() is called again.
+ */
+function SessionReleaseLock()
+{
+	if(session_status() === PHP_SESSION_ACTIVE)
+		@session_write_close();
 }
 
 /**
@@ -1028,7 +1177,10 @@ function SessionFileHasPushAuth($sessionData, $targetId, $admin = false)
 {
 	global $bm_prefs;
 
-	ReadConfig();
+	// Do not call ReadConfig() here: push scans every sess_* file, and reloading
+	// prefs/domains per file stalls inbound pipe.php for minutes on busy systems.
+	if(!isset($bm_prefs['session_lifetime']))
+		SessionApplyPrefDefaults();
 
 	$targetId = (int)$targetId;
 	if($targetId <= 0 || $sessionData === '')
@@ -1115,6 +1267,23 @@ function SessionTargetGetPushSessionState($targetId, $admin = false)
 	if($targetId <= 0)
 		return('none');
 
+	// Prefer the live request session (file scan can miss the locked current sess_* file).
+	if($admin)
+	{
+		if(!empty($_SESSION['bm_adminLoggedIn']) && (int)($_SESSION['bm_adminID'] ?? 0) === $targetId)
+		{
+			SessionEnsureLifecycleKeys(true);
+			$keys = SessionLifecycleKeys(true);
+			return(!empty($_SESSION[$keys['locked']]) ? 'locked' : 'active');
+		}
+	}
+	else if(!empty($_SESSION['bm_userLoggedIn']) && (int)($_SESSION['bm_userID'] ?? 0) === $targetId)
+	{
+		SessionEnsureLifecycleKeys(false);
+		$keys = SessionLifecycleKeys(false);
+		return(!empty($_SESSION[$keys['locked']]) ? 'locked' : 'active');
+	}
+
 	$sessionPath = SessionStoragePath();
 	if(!is_dir($sessionPath) || !is_readable($sessionPath))
 		return('none');
@@ -1131,6 +1300,11 @@ function SessionTargetGetPushSessionState($targetId, $admin = false)
 
 		$fullPath = $sessionPath.$file;
 		if(!is_file($fullPath) || !is_readable($fullPath))
+			continue;
+
+		// Empty files are anonymous/aborted session_start leftovers – never push-auth.
+		$size = @filesize($fullPath);
+		if($size === false || $size < 1)
 			continue;
 
 		$data = @file_get_contents($fullPath);
@@ -1183,6 +1357,10 @@ function SessionFindActivePushSessionId($targetId, $admin = false)
 
 		$fullPath = $sessionPath.$file;
 		if(!is_file($fullPath) || !is_readable($fullPath))
+			continue;
+
+		$size = @filesize($fullPath);
+		if($size === false || $size < 1)
 			continue;
 
 		$data = @file_get_contents($fullPath);
@@ -1323,6 +1501,10 @@ function SessionGetStatusArray($admin = false)
 	if(!$locked && $warnBefore > 0 && $idle > 0 && $idleIn > 0 && $idleIn <= $warnBefore)
 		$warn = true;
 
+	$timezoneSynced = !empty($_SESSION['bm_timezone_just_synced']);
+	if($timezoneSynced)
+		unset($_SESSION['bm_timezone_just_synced']);
+
 	return array(
 		'ok'         => true,
 		'locked'     => $locked,
@@ -1333,6 +1515,7 @@ function SessionGetStatusArray($admin = false)
 		'idle'       => (int)$bm_prefs['session_idle_timeout'],
 		'warnBefore' => (int)$bm_prefs['session_warn_before'],
 		'csrfToken'  => CsrfTokenGet(),
+		'timezoneSynced' => $timezoneSynced,
 	);
 }
 
@@ -1535,6 +1718,28 @@ function SessionUnlock($passwordPlain, $admin = false)
 }
 
 /**
+ * Apply timezone offset from API request (sessionStatus / keepAlive).
+ *
+ * @return bool True when the offset changed
+ */
+function SessionSyncTimezoneFromRequest()
+{
+	global $userRow, $bm_prefs;
+
+	if(!isset($bm_prefs['auto_tz']) || $bm_prefs['auto_tz'] != 'yes')
+		return false;
+
+	if(!isset($_REQUEST['timezone']) || $_REQUEST['timezone'] === '' || !is_numeric($_REQUEST['timezone']))
+		return false;
+
+	$userID = (!empty($userRow['id'])) ? (int)$userRow['id'] : 0;
+	$changed = ApplyClientTimezoneOffset((int)$_REQUEST['timezone'], $userID);
+	if($changed)
+		$_SESSION['bm_timezone_just_synced'] = true;
+	return $changed;
+}
+
+/**
  * @param bool $admin
  */
 function SessionKeepAlive($admin = false)
@@ -1544,6 +1749,9 @@ function SessionKeepAlive($admin = false)
 	$keys = SessionLifecycleKeys($admin);
 	$_SESSION[$keys['activity']] = time();
 	$_SESSION[$keys['locked']] = false;
+
+	if(!$admin)
+		SessionSyncTimezoneFromRequest();
 
 	if(!$admin && !empty($userRow['id']))
 	{
@@ -1581,6 +1789,7 @@ function SessionHandleUserApi($action)
 	switch($action)
 	{
 	case 'sessionStatus':
+		SessionSyncTimezoneFromRequest();
 		SessionJsonResponse(SessionGetStatusArray(false));
 		break;
 
