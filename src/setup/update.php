@@ -509,6 +509,11 @@ elseif ($step == STEP_UPDATE_STEP) {
             $queries[] = 'ALTER TABLE '.$mysql['prefix'].'mails DROP body';
         }
 
+        // Legacy mobile interface (/m) removed
+        $queries[] = 'ALTER TABLE '.$mysql['prefix'].'prefs DROP mobile_url';
+        $queries[] = 'ALTER TABLE '.$mysql['prefix'].'prefs DROP redirect_mobile';
+        $queries[] = 'ALTER TABLE '.$mysql['prefix'].'gruppen DROP wap';
+
         $count = count($queries);
 
         // done?

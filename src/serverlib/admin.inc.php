@@ -125,7 +125,6 @@ $faqRequirementTable = [
     'pop3' => $lang_admin['pop3'],
     'imap' => $lang_admin['imap'],
     'webdav' => $lang_admin['webdav'],
-    'wap' => $lang_admin['mobileaccess'],
     'checker' => $lang_admin['mailchecker'],
     'webdisk' => $lang_admin['webdisk'],
     'share' => $lang_admin['wdshare'],
