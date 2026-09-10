@@ -29,7 +29,9 @@ class BMPushVapid
             return false;
         }
 
-        $uncompressed = "\x04".$details['ec']['x'].$details['ec']['y'];
+        $uncompressed = "\x04"
+            .str_pad(ltrim($details['ec']['x'], "\x00"), 32, "\x00", STR_PAD_LEFT)
+            .str_pad(ltrim($details['ec']['y'], "\x00"), 32, "\x00", STR_PAD_LEFT);
 
         return [
             'public' => self::base64UrlEncode($uncompressed),
@@ -160,7 +162,9 @@ class BMPushVapid
             return false;
         }
 
-        return "\x04".$details['ec']['x'].$details['ec']['y'];
+        return "\x04"
+            .str_pad(ltrim($details['ec']['x'], "\x00"), 32, "\x00", STR_PAD_LEFT)
+            .str_pad(ltrim($details['ec']['y'], "\x00"), 32, "\x00", STR_PAD_LEFT);
     }
 
     private static function exportPrivatePem($key)
